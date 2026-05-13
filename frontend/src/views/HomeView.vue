@@ -5,13 +5,13 @@ const backendStatus = ref<string>('checking...')
 
 onMounted(async () => {
   try {
-    const res = await fetch('/api/../health').catch(() => fetch('/health'))
-    if (res.ok) {
-      const body = await res.json()
-      backendStatus.value = body.status
-    } else {
+    const res = await fetch('/health')
+    if (!res.ok) {
       backendStatus.value = 'unreachable'
+      return
     }
+    const body = await res.json()
+    backendStatus.value = body.status ?? 'unknown'
   } catch {
     backendStatus.value = 'unreachable'
   }

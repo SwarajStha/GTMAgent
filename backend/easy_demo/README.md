@@ -29,7 +29,7 @@ The current version supports:
 ## 2. Project Structure / 项目结构
 
 ```text
-tender_gtm_demo/
+easy_demo/
 ├── tender_pipeline.py
 ├── requirements.txt
 ├── README.md

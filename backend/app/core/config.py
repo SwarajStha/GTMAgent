@@ -37,6 +37,22 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO")
     environment: str = Field(default="development")
+    dossier_storage_path: str = Field(
+        default="./storage/dossiers",
+        description="Filesystem root for downloaded tender dossier PDFs.",
+    )
+    ted_user_agent: str = Field(
+        default="GTMAgent/0.1 (TUM CITHN2014 course project)",
+        description="User-Agent sent on every TED API request.",
+    )
+    ted_request_delay_ms: int = Field(
+        default=150,
+        description="Sleep between paginated TED requests, in milliseconds.",
+    )
+    ted_request_timeout_s: int = Field(
+        default=30,
+        description="Per-request timeout for TED HTTP calls, in seconds.",
+    )
 
     @property
     def cpv_code_list(self) -> list[str]:

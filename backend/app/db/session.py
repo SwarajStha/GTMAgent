@@ -5,8 +5,11 @@ queries. Alembic uses the *direct* string (DATABASE_URL_DIRECT, 5432).
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
 
@@ -29,3 +32,17 @@ SessionLocal = sessionmaker(
 
 class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
+
+
+@contextmanager
+def get_session() -> Iterator[Session]:
+    """Yield a Session, commit on success, rollback + re-raise on error."""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

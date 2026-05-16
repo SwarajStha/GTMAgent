@@ -18,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
     func,
@@ -40,19 +41,43 @@ class TimestampMixin:
     )
 
 
-class Tender(Base, TimestampMixin):
+class Tender(Base):
     __tablename__ = "tenders"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ted_notice_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
     )
-    cpv_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-    title: Mapped[str] = mapped_column(Text, nullable=False)
-    budget_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    buyer_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     buyer_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    deadline: Mapped[Date | None] = mapped_column(Date, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="new", nullable=False)
-    tender_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    cpv_codes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    budget_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="active", default="active"
+    )
+    document_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_restricted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=func.false(), default=False
+    )
+    raw_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        default=datetime.utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        default=datetime.utcnow,
+    )
 
     awards: Mapped[list["Award"]] = relationship(back_populates="tender")
     documents: Mapped[list["Document"]] = relationship(back_populates="tender")
@@ -65,8 +90,8 @@ class Award(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    tender_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenders.id"), nullable=False, index=True
+    tender_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tenders.id"), nullable=False, index=True
     )
     winner_name: Mapped[str] = mapped_column(Text, nullable=False)
     winner_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -83,8 +108,8 @@ class Document(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    tender_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenders.id"), nullable=False, index=True
+    tender_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tenders.id"), nullable=False, index=True
     )
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
@@ -116,8 +141,8 @@ class Match(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    tender_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenders.id"), nullable=False, index=True
+    tender_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tenders.id"), nullable=False, index=True
     )
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("company_profiles.id"), nullable=False, index=True

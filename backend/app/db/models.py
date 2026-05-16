@@ -8,10 +8,11 @@ Every table:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    JSON,
     SMALLINT,
     Boolean,
     Date,
@@ -79,27 +80,62 @@ class Tender(Base):
         default=datetime.utcnow,
     )
 
-    awards: Mapped[list["Award"]] = relationship(back_populates="tender")
     documents: Mapped[list["Document"]] = relationship(back_populates="tender")
     matches: Mapped[list["Match"]] = relationship(back_populates="tender")
 
 
-class Award(Base, TimestampMixin):
+class Company(Base):
+    """Canonical company entity, populated by award-winner resolution.
+
+    Distinct from `company_profiles` (Phase 5 — scraped capability profiles).
+    `resolution_key` is the normalised name used to dedupe variant spellings.
+    """
+
+    __tablename__ = "companies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    canonical_name: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
+    resolution_key: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    country: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        default=datetime.utcnow,
+    )
+
+
+class Award(Base):
+    """One row per TED Award (CAN) notice.
+
+    Distinct publications from Contract Notices — they share only a procedure
+    identifier, not a row-level FK. Winners resolve to a `companies` row.
+    """
+
     __tablename__ = "awards"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ted_notice_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
     )
-    tender_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("tenders.id"), nullable=False, index=True
+    cpv_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    buyer_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    buyer_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    winner_raw_name: Mapped[str] = mapped_column(Text, nullable=False)
+    winner_canonical_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True, index=True
     )
-    winner_name: Mapped[str] = mapped_column(Text, nullable=False)
-    winner_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     contract_value_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
-    award_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
-    cpv_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-
-    tender: Mapped[Tender] = relationship(back_populates="awards")
+    award_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    n_offers_received: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        default=datetime.utcnow,
+    )
 
 
 class Document(Base, TimestampMixin):

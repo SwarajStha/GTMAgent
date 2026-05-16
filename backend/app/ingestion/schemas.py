@@ -7,7 +7,7 @@ schema drift between the v3 legacy keys and the eForms BT-XXX keys.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -267,3 +267,215 @@ def _amount_from(val: Any) -> float | None:
 
 def _pick_amount(raw: dict[str, Any], primary: str, *fallbacks: str) -> float | None:
     return _amount_from(_pick(raw, primary, *fallbacks))
+
+
+class AwardRow(BaseModel):
+    """One row of the `awards` table, pre-DB.
+
+    `winner_canonical_id` is populated by the entity-resolution step in
+    `awards_client.backfill_awards`, not by `from_ted_response` — the FK
+    target row may not exist yet at parse time.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    ted_notice_id: str
+    cpv_code: str | None = None
+    buyer_name: str | None = None
+    buyer_country: str | None = None
+    winner_raw_name: str
+    winner_canonical_id: int | None = None
+    contract_value_eur: float | None = None
+    award_date: date | None = None
+    n_offers_received: int | None = None
+    raw_json: dict[str, Any]
+
+    @classmethod
+    def from_ted_response(cls, raw: dict[str, Any]) -> "AwardRow | None":
+        """Map a single TED Award (CAN) notice payload into an AwardRow.
+
+        Returns None (and logs WARNING) when a *required* field is absent
+        after all fallbacks — `publication-number` or `winner_raw_name`.
+        For optional fields, drift-tolerant lookup: try the primary key
+        first, then each fallback in order; if all are absent, log
+        WARNING and store None.
+
+        Same lot-flattening caveat as `TenderRow.from_ted_response`:
+        TED's Search API is notice-based, not lot-based. Multi-lot
+        notices flatten lot values into top-level lists with no reliable
+        lot-to-value mapping. Convention here is "take first element" —
+        a TED structural limitation, not a parsing bug.
+        """
+        notice_id = raw.get("publication-number")
+        if not notice_id:
+            logger.warning("Award notice missing publication-number; skipping")
+            return None
+        notice_id = str(notice_id)
+
+        # Winner name. Round-2 live evidence (notice 82677-2026 et al,
+        # 2026-05-16): on selec-w notices, `organisation-name-tenderer` is
+        # always populated (as a multilingual dict). `tendering-party-name`
+        # is sometimes also present (flat list). `winner-touchpoint-name`
+        # is in the supported-fields list but never populated in practice.
+        winner = _str_from(
+            _award_first(
+                raw,
+                "organisation-name-tenderer",
+                "tendering-party-name",
+                "winner-touchpoint-name",
+                "winner-touchpoint-partname",
+                notice_id=notice_id,
+                field_label="winner_raw_name",
+            )
+        )
+        if not winner:
+            logger.warning(
+                "Award notice %s missing winner_raw_name; skipping", notice_id
+            )
+            return None
+
+        # BT-720 is awarded contract value; BT-160 is the tender's
+        # original offered value (often equal, sometimes not).
+        value_raw = _award_first(
+            raw,
+            "BT-720-Tender",
+            "BT-160-Tender",
+            notice_id=notice_id,
+            field_label="contract_value_eur",
+        )
+        contract_value_eur = _to_float(value_raw)
+
+        # `winner-decision-date` is when the winner was chosen;
+        # `BT-145-Contract` is when the contract was concluded (signed).
+        # `BT-1451-Contract` is an alternative encoding of the decision date.
+        date_raw = _award_first(
+            raw,
+            "winner-decision-date",
+            "BT-145-Contract",
+            "BT-1451-Contract",
+            notice_id=notice_id,
+            field_label="award_date",
+        )
+        award_date = _to_iso_date(date_raw)
+
+        n_offers_raw = _award_first(
+            raw,
+            "BT-759-LotResult",
+            notice_id=notice_id,
+            field_label="n_offers_received",
+            warn_on_miss=False,
+        )
+        n_offers_received = _to_int(n_offers_raw)
+
+        cpv_val = _award_first(
+            raw,
+            "classification-cpv",
+            notice_id=notice_id,
+            field_label="cpv_code",
+            warn_on_miss=False,
+        )
+        cpv_code = _str_from(cpv_val)
+
+        buyer_name = _str_from(
+            _award_first(
+                raw,
+                "buyer-name",
+                "organisation-name-buyer",
+                notice_id=notice_id,
+                field_label="buyer_name",
+                warn_on_miss=False,
+            )
+        )
+        buyer_country = _str_from(
+            _award_first(
+                raw,
+                "buyer-country",
+                "organisation-country-buyer",
+                notice_id=notice_id,
+                field_label="buyer_country",
+                warn_on_miss=False,
+            )
+        )
+
+        return cls(
+            ted_notice_id=notice_id,
+            cpv_code=cpv_code,
+            buyer_name=buyer_name,
+            buyer_country=buyer_country,
+            winner_raw_name=winner,
+            contract_value_eur=contract_value_eur,
+            award_date=award_date,
+            n_offers_received=n_offers_received,
+            raw_json=raw,
+        )
+
+
+def _award_first(
+    raw: dict[str, Any],
+    *keys: str,
+    notice_id: str = "<unknown>",
+    field_label: str = "?",
+    warn_on_miss: bool = True,
+) -> Any:
+    """Award-specific key lookup. Returns the first non-None value among
+    `keys`, taking `list[0]` if a list (the TED multi-lot flattening
+    convention). Logs a WARNING with notice-id context if all keys are
+    absent (suppressible)."""
+    for key in keys:
+        v = raw.get(key)
+        if v is None:
+            continue
+        if isinstance(v, list):
+            if not v:
+                continue
+            return v[0]
+        return v
+    if warn_on_miss:
+        logger.warning(
+            "Award %s: %s missing — none of %s present",
+            notice_id,
+            field_label,
+            ", ".join(repr(k) for k in keys),
+        )
+    return None
+
+
+def _to_float(val: Any) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(str(val))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(val: Any) -> int | None:
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, int):
+        return val
+    try:
+        return int(str(val))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_iso_date(val: Any) -> date | None:
+    """Parse an ISO date (YYYY-MM-DD or longer with time suffix) to `date`."""
+    if val is None:
+        return None
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if not isinstance(val, str):
+        return None
+    # Accept YYYY-MM-DD plus full ISO datetimes — take the date part.
+    try:
+        return date.fromisoformat(val[:10])
+    except ValueError:
+        return None

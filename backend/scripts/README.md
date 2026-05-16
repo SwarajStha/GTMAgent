@@ -1,0 +1,209 @@
+# backend/scripts
+
+Diagnostic + maintenance scripts for the backend. Intentionally separate from `backend/app/` — these are operator tools, not part of the runtime package.
+
+Current contents:
+
+| File | Purpose |
+|---|---|
+| `ted_smoke.py` | TED v3 ingestion smoke test — exercises the live API and (optionally) writes to the `tenders` table |
+
+---
+
+## ted_smoke.py
+
+End-to-end exerciser for the Phase 2 / Job 1 TED Contract Notice poller. Useful for:
+
+- Verifying the live TED API is reachable and returning data
+- Confirming our query syntax + body fields still get HTTP 200
+- Seeing exactly what shape TED responses take (handy for understanding field mapping)
+- Smoke-testing the insert/upsert path after schema changes or migrations
+
+It runs in two phases (either can be skipped via flags):
+
+**Phase 1 — PEEK**: one `TedClient.search()` call. Dumps the response's top-level keys, the first notice's keys, and a 2KB-truncated JSON of the first notice. No DB activity. Useful for "what does today's TED response actually look like?"
+
+**Phase 2 — POLL**: `poll_contract_notices()` end-to-end. Defaults to `dry_run=True` (parses everything, writes nothing). Pass `--live` to flip `dry_run=False` and actually upsert into `tenders`.
+
+### Prerequisites
+
+The same prereqs as the rest of the backend (see the [root README](../../README.md#prerequisites)):
+
+- Docker Desktop running with the project's `gtmagent-db-1` container up
+- Python 3.11 venv at `backend/.venv` with `pip install -r backend/requirements-dev.txt`
+- `backend/.env` populated (the script chdirs to `backend/` internally so Settings finds it)
+
+Quick prerequisite check:
+
+```powershell
+docker ps --filter "name=gtm" --format "table {{.Names}}\t{{.Status}}"
+# Expected: gtmagent-db-1   Up X minutes (healthy)
+```
+
+If the container isn't up: `docker compose up -d db` from the repo root.
+
+### Running
+
+From the **repo root** (`c:\dev\GTMAgent`) with the venv active:
+
+```powershell
+# Default — both phases, dry-run, days=3, limit=5, verbose
+python backend\scripts\ted_smoke.py
+
+# Just see the raw API shape (no DB activity)
+python backend\scripts\ted_smoke.py --no-dry-run
+
+# Write 5 rows to the tenders table (idempotent — re-run gives 5 updates)
+python backend\scripts\ted_smoke.py --live --limit 5 --no-peek
+
+# Wider window for testing pagination
+python backend\scripts\ted_smoke.py --days 30 --limit 200 --no-peek
+```
+
+### Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--cpv 45000000-7,72000000-5` | from `.env` `ALLOWED_CPV_CODES` | Override CPV scope (comma-separated). EU check-digit suffix is stripped before sending. |
+| `--days N` | `3` | Polling window: `publication-date >= today - N days` |
+| `--limit N` | `5` | Max notices to consume across all pages |
+| `--no-peek` | off | Skip Phase 1 (the raw response dump) |
+| `--no-dry-run` | off | Skip Phase 2 (the poll) — useful with `--no-peek` to do neither, but mostly used with phase 1 only |
+| `--live` | off | **Phase 2 writes to DB.** Without this flag, Phase 2 parses notices but does not touch `tenders`. |
+| `--quiet` | off | Suppress per-notice INFO logs in Phase 2 |
+
+### Reading the output
+
+Phase 1 should print something like:
+
+```
+--- PHASE 1: raw peek (limit=5) ---
+QUERY: notice-type IN (cn-standard, cn-social) AND classification-cpv IN (45000000, 72000000) AND publication-date >= 20260513
+2026-05-16 09:28:52 INFO httpx HTTP Request: POST https://api.ted.europa.eu/v3/notices/search "HTTP/1.1 200 OK"
+RESPONSE TOP-LEVEL KEYS: ['iterationNextToken', 'notices', 'timedOut', 'totalNoticeCount']
+Found 5 notices under key 'notices'
+First notice keys: ['BT-131(d)-Lot', 'BT-21-Procedure', ..., 'publication-number']
+First notice (truncated):
+{ ... }
+```
+
+Phase 2 should end with:
+
+```
+2026-05-16 09:28:52 INFO app.ingestion.ted_client Poll complete: 5 fetched, 0 new, 0 updated, 0 errors
+SUMMARY: {'fetched': 5, 'new': 0, 'updated': 0, 'errors': 0}
+```
+
+In `--live` mode, `new` + `updated` should sum to `fetched`. First live run on a fresh DB: `new = fetched`. Second run with the same notices: `updated = fetched` and `new = 0`.
+
+### What to do if it fails
+
+- **HTTP 400 Bad Request**: The script prints the full TED error body in Phase 1 (a wrapper around `_peek` catches `HTTPStatusError`). Read the `error.type` and `unsupportedValue` fields to see exactly what TED rejected.
+- **HTTP 200 but "NO LIST FOUND under expected keys"**: the response envelope shape changed. Update `_iter_notices` in [backend/app/ingestion/ted_client.py](../app/ingestion/ted_client.py).
+- **`CERTIFICATE_VERIFY_FAILED`**: Local SSL trust issue (AV / corporate proxy intercepting TLS). The `truststore` package wired into `TedClient` should already handle this; if it doesn't, check that `truststore==0.10.4` is installed in the venv.
+- **`ConnectError` to api.ted.europa.eu**: Try `--no-peek --no-dry-run` to confirm script wiring; check internet reachability. The TedClient also retries once on `tedweb.api.ted.europa.eu/v3/...` automatically.
+
+---
+
+## Inspecting what got written — DB query cheatsheet
+
+After a `--live` run, here are copy-paste queries for inspecting the `tenders` table from the Docker container. Run any of these from your shell.
+
+### Row counts across all tables
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT 'tenders' AS t, count(*) FROM tenders UNION ALL SELECT 'awards', count(*) FROM awards UNION ALL SELECT 'company_profiles', count(*) FROM company_profiles UNION ALL SELECT 'documents', count(*) FROM documents UNION ALL SELECT 'matches', count(*) FROM matches UNION ALL SELECT 'emails', count(*) FROM emails UNION ALL SELECT 'feedback', count(*) FROM feedback UNION ALL SELECT 'embeddings', count(*) FROM embeddings ORDER BY 1;"
+```
+
+Tells you which tables have data. After Job 1, only `tenders` should be populated.
+
+### Show schema of the tenders table
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d tenders"
+```
+
+Lists every column with its type, nullability, default, and indexes/FKs referencing it. Best one-shot view of what the table looks like.
+
+### List all rows with key parsed columns
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer_country, deadline::date, substr(title, 1, 60) FROM tenders;"
+```
+
+Quick scan: did we get notices from a variety of countries? Are deadlines sensible? Are titles populated?
+
+### Full raw JSON for one notice (pretty-printed)
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT jsonb_pretty(raw_json) FROM tenders WHERE ted_notice_id = '326612-2026';"
+```
+
+Swap the `ted_notice_id` for any value you saw in the previous query. This is the **complete original TED notice** — every field TED returned, including ones we don't surface in dedicated columns yet. Useful when designing future jobs (the matcher and drafter will mine this for evidence).
+
+### Side-by-side: parsed columns vs. raw fields they came from
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id AS parsed_id, raw_json->>'publication-number' AS raw_id, title AS parsed_title, raw_json->'BT-21-Procedure' AS raw_BT21, buyer_country AS parsed_country, raw_json->'buyer-country' AS raw_country, cpv_codes AS parsed_cpvs, raw_json->'classification-cpv' AS raw_cpvs FROM tenders WHERE ted_notice_id = '326612-2026';"
+```
+
+Documents the field mapping in actual data — useful for understanding how `from_ted_response` translates each TED key into our schema. The mapping logic lives in [backend/app/ingestion/schemas.py](../app/ingestion/schemas.py).
+
+### Verify the upsert path bumped updated_at correctly
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, ingested_at, updated_at, ingested_at < updated_at AS was_updated FROM tenders ORDER BY ted_notice_id;"
+```
+
+After two consecutive `--live` runs, all rows should show `was_updated = t`. After the first run, all should be `f`.
+
+### Export one row's raw JSON to a file for browsing in your editor
+
+```powershell
+docker exec gtmagent-db-1 psql -U gtm -d gtm -t -A -c "SELECT jsonb_pretty(raw_json) FROM tenders WHERE ted_notice_id = '326612-2026';" > c:\dev\GTMAgent\backend\storage\sample_326612.json
+```
+
+Then open `backend\storage\sample_326612.json` in VS Code. The `-t -A` flags strip psql's header/borders for clean JSON output.
+
+### Truncate the table (start fresh)
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "TRUNCATE tenders RESTART IDENTITY CASCADE;"
+```
+
+Wipes all rows and resets the autoincrement counter. `CASCADE` follows FKs into `awards`/`documents`/`matches` (they'll all clear too, though they should be empty already during Phase 2).
+
+### Drop the database entirely (nuclear option)
+
+```powershell
+docker compose down -v          # wipes the pgdata volume
+docker compose up -d db
+cd backend
+alembic upgrade head            # rebuild schema at migration 0001 head
+```
+
+Use when migrations get tangled (e.g. after switching branches with a different migration head).
+
+---
+
+## GUI alternatives
+
+If you prefer point-and-click over psql:
+
+| Tool | Pros |
+|---|---|
+| **DBeaver** (free desktop) | Free, cross-platform, expand JSONB cells inline by clicking `...` or `Shift+Enter`. Connect: host `localhost`, port `5432`, db `gtm`, user `gtm`, password `gtm`. |
+| **pgAdmin** (free desktop) | Reference PG GUI; heavier UI. Same connection params. |
+| **Adminer** (in-container web GUI) | Not currently in `docker-compose.yml`. Ask if you want it added. |
+
+---
+
+## Adding new scripts here
+
+When adding another diagnostic / maintenance script:
+
+- Make it self-contained — `os.chdir(ROOT)` near the top so `backend/.env` loads regardless of where the script is invoked from
+- Use `argparse` for any tunable flags (window size, limit, dry-run toggle)
+- Log via the standard `logging` module — not `print()` — and call `logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")` once at the top of `main()`
+- Document it in this README with a flag table + sample output
+- Keep destructive operations (writes, truncates) behind an explicit flag like `--live` so accidental invocation is harmless

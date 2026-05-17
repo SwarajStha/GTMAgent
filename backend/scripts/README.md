@@ -6,7 +6,8 @@ Current contents:
 
 | File | Purpose |
 |---|---|
-| `ted_smoke.py` | TED v3 ingestion smoke test — exercises the live API and (optionally) writes to the `tenders` table |
+| `ted_smoke.py` | TED v3 ingestion smoke test (Job 1) — exercises the live API and (optionally) writes to the `tenders` table |
+| `awards_smoke.py` | TED Award (CAN) back-fill smoke test (Job 2) — exercises the live API and (optionally) writes to the `awards` + `companies` tables |
 
 ---
 
@@ -105,6 +106,75 @@ In `--live` mode, `new` + `updated` should sum to `fetched`. First live run on a
 
 ---
 
+## awards_smoke.py
+
+End-to-end exerciser for the Phase 2 / Job 2 TED Award (CAN) back-fill. Same two-phase shape as `ted_smoke.py`:
+
+**Phase 1 — PEEK**: one `TedClient.search()` call with the awards query (`notice-type IN (can-standard, can-social, can-desg)`). Dumps response top-level keys, the first notice's keys, and a 2KB-truncated JSON of the first notice. No DB activity.
+
+**Phase 2 — DRY-RUN / LIVE**: `backfill_awards()` end-to-end. Defaults to `dry_run=True` (parses everything, opens no DB session). Pass `--live` to flip `dry_run=False` and actually upsert into `awards` + resolve winners into `companies`.
+
+### Prerequisites
+
+Same prereqs as `ted_smoke.py` (Docker DB up, venv populated, `.env` present). Additionally, **migration `0002_awards_companies` must be applied** before any `--live` run — otherwise the inserts will fail against the scaffold `awards` shape from `0001`:
+
+```powershell
+cd backend
+.\.venv\Scripts\alembic.exe upgrade head
+```
+
+### Running
+
+From the **repo root** (`c:\dev\GTMAgent`) with the venv active:
+
+```powershell
+# Default — both phases, dry-run, months=24, limit=5, verbose
+python backend\scripts\awards_smoke.py
+
+# Just see the raw API shape (no DB activity)
+python backend\scripts\awards_smoke.py --no-dry-run
+
+# Write 5 award rows + resolve their winners (idempotent — re-run gives 5 updates)
+python backend\scripts\awards_smoke.py --live --limit 5 --no-peek
+
+# Shorter window for faster iteration
+python backend\scripts\awards_smoke.py --months 6 --limit 20
+```
+
+### Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--cpv 45000000-7,72000000-5` | from `.env` `ALLOWED_CPV_CODES` | Override CPV scope. Check-digit suffix stripped before sending. |
+| `--months N` | `24` (from `Settings.awards_backfill_months`) | Back-fill window: `publication-date >= today - (N × 30) days` |
+| `--limit N` | `5` | Max notices to consume across all pages |
+| `--no-peek` | off | Skip Phase 1 |
+| `--no-dry-run` | off | Skip Phase 2 |
+| `--live` | off | **Phase 2 writes to DB.** Without this flag, Phase 2 parses notices but opens no DB session. |
+| `--quiet` | off | Suppress per-notice INFO logs in Phase 2 |
+
+### Reading the output
+
+Phase 2 should end with:
+
+```
+INFO app.ingestion.awards_client Backfill complete: 5 fetched, 5 new, 0 updated, 4 companies, 0 errors
+SUMMARY: {'fetched': 5, 'new': 5, 'updated': 0, 'companies_created': 4, 'errors': 0}
+```
+
+`companies_created` ≤ `new` because winner-name dedup happens at insert time — if two awards have the same winner (e.g. "Hochtief AG" and "Hochtief Aktiengesellschaft"), the second resolves to the existing `companies` row.
+
+### What to do if it fails
+
+- **HTTP 400 with "Value 'can-desg' is not supported"** (or `'can-social'`): mirrors the Job 1 `cn-light` lesson. Edit `NOTICE_TYPES` in [backend/app/ingestion/awards_client.py](../app/ingestion/awards_client.py) — drop the rejected value and re-run. The smoke script prints a HINT to this effect when it sees `can-desg` or `can-social` in the error body.
+- **HTTP 400 with "Value 'BT-720-Lot-Tender-Value' is not supported"** (or any other field name): the TED docs vs. live API mismatch from Job 1 is back. Edit `AWARD_FIELDS` in the same file, drop the offending field, re-run.
+- **Phase 2 returns `fetched=0` with no errors**: the query matched nothing in the window. Try `--months 36` or a different `--cpv`.
+- **`UndefinedTable: relation "companies" does not exist`** on `--live`: migration `0002` hasn't been applied yet. Run `alembic upgrade head` (from `backend/`).
+- **`ForeignKeyViolation` on `awards.winner_canonical_id`**: shouldn't happen — `_process_notice_persistent` flushes the `Company` insert before referencing its id. If it does, the savepoint pattern is broken; check that `session.flush()` runs inside the `begin_nested()` block.
+- Same `CERTIFICATE_VERIFY_FAILED` / `ConnectError` failure modes as Phase 1 of `ted_smoke.py` — see above.
+
+---
+
 ## Inspecting what got written — DB query cheatsheet
 
 After a `--live` run, here are copy-paste queries for inspecting the `tenders` table from the Docker container. Run any of these from your shell.
@@ -112,10 +182,10 @@ After a `--live` run, here are copy-paste queries for inspecting the `tenders` t
 ### Row counts across all tables
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT 'tenders' AS t, count(*) FROM tenders UNION ALL SELECT 'awards', count(*) FROM awards UNION ALL SELECT 'company_profiles', count(*) FROM company_profiles UNION ALL SELECT 'documents', count(*) FROM documents UNION ALL SELECT 'matches', count(*) FROM matches UNION ALL SELECT 'emails', count(*) FROM emails UNION ALL SELECT 'feedback', count(*) FROM feedback UNION ALL SELECT 'embeddings', count(*) FROM embeddings ORDER BY 1;"
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT 'tenders' AS t, count(*) FROM tenders UNION ALL SELECT 'awards', count(*) FROM awards UNION ALL SELECT 'companies', count(*) FROM companies UNION ALL SELECT 'company_profiles', count(*) FROM company_profiles UNION ALL SELECT 'documents', count(*) FROM documents UNION ALL SELECT 'matches', count(*) FROM matches UNION ALL SELECT 'emails', count(*) FROM emails UNION ALL SELECT 'feedback', count(*) FROM feedback UNION ALL SELECT 'embeddings', count(*) FROM embeddings ORDER BY 1;"
 ```
 
-Tells you which tables have data. After Job 1, only `tenders` should be populated.
+Tells you which tables have data. After Job 1, only `tenders` should be populated. After Job 2 (`awards_smoke.py --live`), `awards` and `companies` will be populated too.
 
 ### Show schema of the tenders table
 
@@ -171,7 +241,52 @@ Then open `backend\storage\sample_326612.json` in VS Code. The `-t -A` flags str
 docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "TRUNCATE tenders RESTART IDENTITY CASCADE;"
 ```
 
-Wipes all rows and resets the autoincrement counter. `CASCADE` follows FKs into `awards`/`documents`/`matches` (they'll all clear too, though they should be empty already during Phase 2).
+Wipes all rows and resets the autoincrement counter. `CASCADE` follows FKs into `documents`/`matches` (Job 2's `awards` table is NOT a child of `tenders` and won't be touched).
+
+---
+
+## Awards + companies (Job 2)
+
+After a `--live` run of `awards_smoke.py`, here are the parallel queries for the new tables.
+
+### Show schema
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d awards"
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d companies"
+```
+
+### Join awards to their resolved winners
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT a.ted_notice_id, c.canonical_name AS winner, a.buyer_country, a.contract_value_eur, a.award_date FROM awards a LEFT JOIN companies c ON c.id = a.winner_canonical_id ORDER BY a.award_date DESC NULLS LAST LIMIT 20;"
+```
+
+Quick scan: did each award resolve to a `companies` row? Are buyer countries plausible? Are contract values populated for most rows?
+
+### See the winner-dedup in action
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT canonical_name, resolution_key, jsonb_array_length(aliases::jsonb) AS n_aliases, aliases FROM companies WHERE jsonb_array_length(aliases::jsonb) > 1 ORDER BY n_aliases DESC;"
+```
+
+Lists companies that have more than one alias — i.e. cases where `resolve_or_create` collapsed variant spellings ("Hochtief AG" + "Hochtief Aktiengesellschaft") into one row.
+
+### Find awards where winner resolution didn't run
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, winner_raw_name FROM awards WHERE winner_canonical_id IS NULL;"
+```
+
+Should be empty after a clean `--live` run. Non-empty means a row landed without the entity-resolution savepoint completing — investigate the log for `Failed to upsert award notice id=...`.
+
+### Truncate awards + companies (start fresh)
+
+```powershell
+docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "TRUNCATE awards, companies RESTART IDENTITY CASCADE;"
+```
+
+Both tables together so the FK doesn't trip. `tenders` is untouched.
 
 ### Drop the database entirely (nuclear option)
 
@@ -179,7 +294,7 @@ Wipes all rows and resets the autoincrement counter. `CASCADE` follows FKs into 
 docker compose down -v          # wipes the pgdata volume
 docker compose up -d db
 cd backend
-alembic upgrade head            # rebuild schema at migration 0001 head
+alembic upgrade head            # rebuild schema at current head (0002 after Job 2)
 ```
 
 Use when migrations get tangled (e.g. after switching branches with a different migration head).

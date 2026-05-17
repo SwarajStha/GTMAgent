@@ -53,6 +53,10 @@ class Settings(BaseSettings):
         default=30,
         description="Per-request timeout for TED HTTP calls, in seconds.",
     )
+    awards_backfill_months: int = Field(
+        default=24,
+        description="How many months back to search for TED award notices during back-fill.",
+    )
 
     @property
     def cpv_code_list(self) -> list[str]:

@@ -269,6 +269,25 @@ def _pick_amount(raw: dict[str, Any], primary: str, *fallbacks: str) -> float | 
     return _amount_from(_pick(raw, primary, *fallbacks))
 
 
+class DocumentRow(BaseModel):
+    """One row of the `documents` table, pre-DB.
+
+    Mirrors the Job-3 `Document` model. Populated by `dossier_downloader`
+    after attempting (and possibly completing) a PDF download.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    tender_id: int
+    source_url: str
+    storage_path: str | None = None
+    extracted_text: str | None = None
+    is_restricted: bool = False
+    download_failed: bool = False
+    file_hash: str | None = None
+    downloaded_at: datetime | None = None
+
+
 class AwardRow(BaseModel):
     """One row of the `awards` table, pre-DB.
 

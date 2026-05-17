@@ -29,6 +29,14 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://gtm:gtm@localhost:5432/gtm",
         description="Direct connection used by Alembic migrations only.",
     )
+    database_url_test: str = Field(
+        default="postgresql+psycopg://gtm:gtm@localhost:5432/gtm_test",
+        description=(
+            "Postgres URL used by pytest fixtures. Must point at a separate "
+            "database from the dev one — tests TRUNCATE/CREATE/DROP freely. "
+            "One-time setup: see backend/scripts/README.md (test DB section)."
+        ),
+    )
     anthropic_api_key: str = Field(default="")
     tavily_api_key: str = Field(default="")
     allowed_cpv_codes: str = Field(
@@ -40,6 +48,10 @@ class Settings(BaseSettings):
     dossier_storage_path: str = Field(
         default="./storage/dossiers",
         description="Filesystem root for downloaded tender dossier PDFs.",
+    )
+    dossier_timeout: int = Field(
+        default=30,
+        description="Per-request timeout for dossier PDF downloads, in seconds.",
     )
     ted_user_agent: str = Field(
         default="GTMAgent/0.1 (TUM CITHN2014 course project)",

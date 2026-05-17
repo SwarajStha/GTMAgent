@@ -11,6 +11,30 @@ Current contents:
 
 ---
 
+## One-time test database setup
+
+The DB-touching tests in `backend/tests/ingestion/test_dossier_downloader.py` (and any future tests that use the `db_session` fixture from `backend/tests/conftest.py`) need a separate Postgres database named `gtm_test`. This is intentional — tests freely `CREATE`, `DROP`, and roll back transactions on it, and we don't want that anywhere near your dev data.
+
+The fixtures don't auto-create the database itself (Postgres doesn't allow `CREATE DATABASE` inside a transaction, and we'd need elevated permissions). One-time setup, with the dev container running:
+
+```powershell
+docker exec gtmagent-db-1 psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
+docker exec gtmagent-db-1 psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
+```
+
+After that, the test fixtures handle everything (schema create/drop, per-test rollback). Verify with:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest tests/ingestion/test_dossier_downloader.py -v
+```
+
+You should see 14 tests pass. If the suite errors out with `database "gtm_test" does not exist`, you missed the `CREATE DATABASE` step above.
+
+The connection string is configurable via `DATABASE_URL_TEST` in `backend/.env` if you want to point at a different host/db — default is `postgresql+psycopg://gtm:gtm@localhost:5432/gtm_test`.
+
+---
+
 ## ted_smoke.py
 
 End-to-end exerciser for the Phase 2 / Job 1 TED Contract Notice poller. Useful for:

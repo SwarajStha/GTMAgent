@@ -45,8 +45,14 @@ class AgentController:
         final_output = ""
 
         # Main tool-use loop
+        max_turns = 20
+        turns = 0
         with SessionLocal() as db_session:
             while True:
+                turns += 1
+                if turns > max_turns:
+                    raise RuntimeError(f"Agent exceeded {max_turns} turns without completing.")
+
                 response = self.client.messages.create(
                     model=self.model,
                     system=SYSTEM_PROMPT,

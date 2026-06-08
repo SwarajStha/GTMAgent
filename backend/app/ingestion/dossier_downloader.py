@@ -291,11 +291,28 @@ def _process_one(
 
     sha256 = compute_sha256(body)
 
-    if not dry_run and _file_hash_exists(session, sha256):
-        # Same PDF already downloaded under a different tender — record
-        # this tender's row pointing at no storage_path of its own, but
-        # don't re-write the file.
-        return "skipped_already_done"
+    if not dry_run:
+        existing = session.execute(
+            select(Document.storage_path, Document.extracted_text, Document.downloaded_at)
+            .where(Document.file_hash == sha256)
+            .where(Document.storage_path.is_not(None))
+            .limit(1)
+        ).first()
+        if existing:
+            existing_path, existing_text, existing_downloaded_at = existing
+            _upsert_document(
+                session,
+                tender_id=tender_id,
+                source_url=url,
+                storage_path=existing_path,
+                extracted_text=existing_text,
+                file_hash=sha256,
+                is_restricted=False,
+                download_failed=False,
+                downloaded_at=existing_downloaded_at or datetime.utcnow(),
+            )
+            session.commit()
+            return "skipped_already_done"
 
     storage_path = storage_root / ted_notice_id / f"{sha256[:16]}.pdf"
     storage_path.parent.mkdir(parents=True, exist_ok=True)

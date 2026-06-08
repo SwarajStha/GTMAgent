@@ -103,12 +103,6 @@ def _get_document(db_session, tender_id: int) -> Document | None:
 def test_download_marks_tender_and_doc_restricted_on_401(
     db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        dd.get_settings().__class__,
-        "dossier_storage_path",
-        str(tmp_path),
-        raising=False,
-    )
     # Simpler than mutating Settings: patch the lookup directly.
     monkeypatch.setattr(dd, "get_settings", lambda: _FakeSettings(tmp_path))
 

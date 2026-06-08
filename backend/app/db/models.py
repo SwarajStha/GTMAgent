@@ -259,3 +259,15 @@ class Embedding(Base, TimestampMixin):
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     model_name: Mapped[str] = mapped_column(String(64), nullable=False)
     vector: Mapped[list[float]] = mapped_column(Vector(768), nullable=False)
+
+
+class AgentRun(Base, TimestampMixin):
+    """Tracks Claude agent execution sessions for the reflection loop."""
+    __tablename__ = "agent_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    steps: Mapped[list | dict | None] = mapped_column(JSONB, nullable=True)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)

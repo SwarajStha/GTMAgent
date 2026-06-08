@@ -346,3 +346,54 @@ When adding another diagnostic / maintenance script:
 - Log via the standard `logging` module — not `print()` — and call `logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")` once at the top of `main()`
 - Document it in this README with a flag table + sample output
 - Keep destructive operations (writes, truncates) behind an explicit flag like `--live` so accidental invocation is harmless
+
+---
+
+## agent_smoke.py
+
+End-to-end exerciser for the ReAct Agent Controller (`AgentController`). Exercises the Anthropic API loop and confirms exactly how the agent translates a query into a sequence of tool dispatches. 
+
+Useful for:
+- Validating your `ANTHROPIC_API_KEY` configuration.
+- Verifying the `messages` and `tools` schema definitions conform properly to Anthropic's Tool Use API strict validation requirements.
+- Inspecting exactly what the agent decides to invoke to accomplish a task.
+
+### Prerequisites
+
+You need a valid `ANTHROPIC_API_KEY` loaded in `backend/.env`.
+
+### Running
+
+From the **repo root** (`c:\dev\GTMAgent`) with the venv active:
+
+```powershell
+# Default prompt
+python backend\scripts\agent_smoke.py
+
+# Custom goal
+python backend\scripts\agent_smoke.py --goal "Can you search the database for IT services tenders?"
+
+# Quiet mode (only final output)
+python backend\scripts\agent_smoke.py --quiet
+```
+
+### Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--goal "... text ..."` | default test objective | The instruction provided to the Agent. |
+| `--live` | off | Indicator flag showing intent to permit real modifications via tools if implemented. |
+| `--quiet` | off | Suppress Python logging, outputting only the Agent's final text payload. |
+
+### Reading the output
+
+You should see log outputs detailing initial API dispatch followed by:
+
+```
+2026-05-31 10:15:00 INFO __main__ === Agent Run Complete ===
+2026-05-31 10:15:00 INFO __main__ Tool Steps Taken: 1
+2026-05-31 10:15:00 INFO __main__   [1] Tool: query_db | Args: {'sql_query': 'SELECT * FROM tenders;'}
+2026-05-31 10:15:00 INFO __main__ === Final Agent Output ===
+
+I have searched the available records based on your parameters...
+```

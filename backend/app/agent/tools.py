@@ -50,8 +50,8 @@ AGENT_TOOLS = [
             "type": "object",
             "properties": {
                 "tender_id": {
-                    "type": "string",
-                    "description": "The UUID of the tender."
+                    "type": "integer",
+                    "description": "The integer primary key of the tender (tenders.id)."
                 },
                 "top_n": {
                     "type": "integer",

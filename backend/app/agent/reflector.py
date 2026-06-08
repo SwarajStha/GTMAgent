@@ -33,9 +33,11 @@ class Reflector:
             recent_feedback = db.query(Feedback).order_by(Feedback.created_at.desc()).limit(50).all()
             feedback_data = [{"rating": f.rating, "comment": f.comment} for f in recent_feedback]
 
+        import json
+
         activity_json = {
             "runs": runs_data,
-            "feedback": feedback_data
+            "feedback": feedback_data,
         }
 
         response = self.client.messages.create(
@@ -43,8 +45,14 @@ class Reflector:
             max_tokens=1024,
             system=REFLECTION_PROMPT,
             messages=[
-                {"role": "user", "content": f"Here is the recent activity data:\n{activity_json}"}
-            ]
+                {
+                    "role": "user",
+                    "content": (
+                        "Here is the recent activity data (JSON):\n"
+                        + json.dumps(activity_json, ensure_ascii=False)
+                    ),
+                }
+            ],
         )
         return response.content[0].text
 

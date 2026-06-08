@@ -37,16 +37,10 @@ AGENT_TOOLS = [
     },
     {
         "name": "download_dossiers",
-        "description": "Attempt to download the PDF dossiers/documents for a given tender.",
+        "description": "Attempt to download missing PDF dossiers/documents for all eligible tenders (bulk sweep).",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "tender_id": {
-                    "type": "string",
-                    "description": "The UUID of the tender."
-                }
-            },
-            "required": ["tender_id"]
+            "properties": {}
         }
     },
     {

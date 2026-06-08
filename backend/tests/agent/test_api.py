@@ -15,23 +15,21 @@ def test_post_agent_run(mock_agent_class):
         "output": "Mocked successful output"
     }
 
-    # For this test, bypass API Key checks safely by using the env or 
-    # we can just run the test and app behavior as config is loaded globally.
-
-    response = client.post(
-        "/api/v1/agent/run",
-        json={"goal": "Test API goal"}
-    )
-    
-    # If the environment does not have ANTHROPIC_API_KEY set, this would fail with 500
-    # To handle that, we mock settings
+    # Mock settings so the endpoint doesn't 500 on missing API key.
     with patch("app.api.v1.agent.get_settings") as mock_settings:
         mock_settings.return_value.anthropic_api_key = "dummy_key_for_api_test"
-        
+
         response = client.post(
             "/api/v1/agent/run",
-            json={"goal": "Test API goal"}
+            json={"goal": "Test API goal"},
         )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["goal"] == "Test API goal"
+        assert data["output"] == "Mocked successful output"
+        assert len(data["steps"]) == 1
+        assert data["steps"][0]["tool"] == "test_tool"
 
         assert response.status_code == 200
         data = response.json()

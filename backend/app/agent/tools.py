@@ -104,9 +104,17 @@ def dispatch_tool(tool_name: str, tool_args: dict, session) -> str:
     """
     if tool_name == "query_db":
         from sqlalchemy import text
+
+        sql = str(tool_args.get("sql_query", "")).strip()
+        sql_l = sql.lower()
+        forbidden = (";", "insert", "update", "delete", "drop", "alter", "truncate", "create")
+        if not sql_l.startswith("select") or any(tok in sql_l for tok in forbidden):
+            return "Error executing query: only single-statement SELECT queries are allowed."
+
         try:
-            result = session.execute(text(tool_args["sql_query"])).mappings().all()
-            return str([dict(row) for row in result])
+            # Prevent unbounded results from bloating tool outputs.
+            rows = session.execute(text(sql)).mappings().fetchmany(50)
+            return str([dict(row) for row in rows])
         except Exception as e:
             return f"Error executing query: {str(e)}"
     

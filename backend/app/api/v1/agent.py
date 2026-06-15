@@ -1,4 +1,5 @@
-from typing import Any, List
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -21,11 +22,15 @@ class AgentRequest(BaseModel):
 
 class AgentStep(BaseModel):
     tool: str
+    # Raw tool input as the model supplied it. Heterogeneous across tools
+    # (e.g. find_matches → {"tender_id": int}, query_db → {"sql_query": str}),
+    # so `dict[str, Any]` is the honest shape — the per-tool field types live in
+    # the tool schemas in app/agent/tools.py, not here.
     args: dict[str, Any]
 
 class AgentResponse(BaseModel):
     goal: str
-    steps: List[AgentStep]
+    steps: list[AgentStep]
     output: str
     truncated: bool = False
 
@@ -36,10 +41,10 @@ def run_agent(request: AgentRequest):
     This runs synchronously and returns the fully evaluated steps and final text.
     """
     settings = get_settings()
-    
+
     if not settings.anthropic_api_key:
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail="Server is not configured with an ANTHROPIC_API_KEY."
         )
 

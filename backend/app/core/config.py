@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO")
     environment: str = Field(default="development")
+    cors_origins: str = Field(
+        default="http://localhost:5173",
+        description="Comma-separated list of browser origins allowed to call the API.",
+    )
     dossier_storage_path: str = Field(
         default="./storage/dossiers",
         description="Filesystem root for downloaded tender dossier PDFs.",
@@ -73,6 +77,10 @@ class Settings(BaseSettings):
     @property
     def cpv_code_list(self) -> list[str]:
         return [c.strip() for c in self.allowed_cpv_codes.split(",") if c.strip()]
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 @lru_cache(maxsize=1)

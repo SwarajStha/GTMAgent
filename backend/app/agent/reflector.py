@@ -20,7 +20,7 @@ Given the following JSON blob of recent activity, provide a brief operational su
 """
 
 class Reflector:
-    def __init__(self, model: str = "claude-3-5-sonnet-20241022", api_key: str | None = None) -> None:
+    def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None) -> None:
         self.model = model
         self.client = anthropic.Anthropic(api_key=api_key)
 

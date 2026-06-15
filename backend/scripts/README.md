@@ -382,8 +382,14 @@ python backend\scripts\agent_smoke.py --quiet
 | Flag | Default | Effect |
 |---|---|---|
 | `--goal "... text ..."` | default test objective | The instruction provided to the Agent. |
-| `--live` | off | Indicator flag showing intent to permit real modifications via tools if implemented. |
+| `--live` | off | **Allows write-capable tools to run for real.** Without this flag (the default), `AgentController(dry_run=True)` makes `ingest_tenders` / `ingest_awards` / `download_dossiers` validate inputs and report what *would* happen without hitting the live TED API or writing to the DB — same `dry_run=` plumbing as `ted_smoke.py`/`awards_smoke.py`. Pass `--live` to flip `dry_run=False` and allow real TED polls / dossier downloads / DB writes as a side effect of whatever plan the model comes up with. |
 | `--quiet` | off | Suppress Python logging, outputting only the Agent's final text payload. |
+
+**Safety note**: a chat-style goal like "find me a recent German tender" can
+cause the model to *plan* a live ingestion or download as a side effect.
+`dry_run=True` (the default for both this script and the `/api/v1/agent/run`
+endpoint) is what keeps that safe to experiment with — only pass `--live`
+when you actually want the agent to write to the DB / hit the TED API.
 
 ### Reading the output
 

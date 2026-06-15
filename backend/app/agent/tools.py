@@ -23,13 +23,17 @@ AGENT_TOOLS = [
     },
     {
         "name": "ingest_awards",
-        "description": "Fetch historical contract awards from TED API to identify past winners.",
+        "description": (
+            "Back-fill historical contract award notices from TED to identify "
+            "past tender winners. Looks back a number of months (the awards "
+            "back-fill is month-granular, not day-granular)."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "days_back": {
+                "months_back": {
                     "type": "integer",
-                    "description": "Number of days back to look.",
+                    "description": "Number of months back to back-fill awards for.",
                     "default": 1
                 }
             }
@@ -92,8 +96,15 @@ AGENT_TOOLS = [
     }
 ]
 
-def dispatch_tool(tool_name: str, tool_args: dict, session) -> str:
+def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True) -> str:
     """Dispatches the tool call to the actual backend logic.
+
+    `dry_run` gates the write-capable tools (`ingest_tenders`,
+    `ingest_awards`, `download_dossiers`): when True (the
+    `AgentController` default) they validate inputs and report what
+    *would* happen without hitting the live TED API or writing to the DB.
+    Pass `dry_run=False` only for an explicitly "live" agent run.
+
     Returns the string representation of the tool output.
     """
     if tool_name == "query_db":
@@ -121,9 +132,10 @@ def dispatch_tool(tool_name: str, tool_args: dict, session) -> str:
             summary = poll_contract_notices(
                 cpv_codes=settings.cpv_code_list,
                 days=days,
-                dry_run=False
+                dry_run=dry_run
             )
-            return f"Tender ingestion complete: {summary}"
+            verb = "would be" if dry_run else "is"
+            return f"Tender ingestion {verb} complete: {summary}"
         except Exception as e:
             return f"Error ingesting tenders: {str(e)}"
 
@@ -131,27 +143,29 @@ def dispatch_tool(tool_name: str, tool_args: dict, session) -> str:
         from app.ingestion.awards_client import backfill_awards
         from app.core.config import get_settings
         try:
-            days = tool_args.get("days_back", 1)
-            # The function expects months, we do a rough conversion for the tool
-            months = max(1, days // 30)
+            # The back-fill is month-granular — the tool schema asks the
+            # model for months directly so "look back 1 day" can't silently
+            # turn into a 1-month live pull (see docs/branch_review_agent_controller.md).
+            months = max(1, int(tool_args.get("months_back", 1)))
             settings = get_settings()
             summary = backfill_awards(
                 cpv_codes=settings.cpv_code_list,
                 backfill_months=months,
-                dry_run=False
+                dry_run=dry_run
             )
-            return f"Awards ingestion complete: {summary}"
+            verb = "would be" if dry_run else "is"
+            return f"Awards ingestion {verb} complete: {summary}"
         except Exception as e:
             return f"Error ingesting awards: {str(e)}"
 
     elif tool_name == "download_dossiers":
         from app.ingestion.dossier_downloader import download_dossiers
         try:
-            # Although standard download_dossiers pulls all missing dossiers,
-            # this handles the trigger (the actual tool might need a tender_id filter, 
-            # but currently download_dossiers does bulk).
-            summary = download_dossiers(dry_run=False)
-            return f"Dossier download sweep triggered (run state: {summary})"
+            # download_dossiers pulls all eligible tenders in bulk — there is
+            # no per-tender filter on the underlying function.
+            summary = download_dossiers(dry_run=dry_run)
+            verb = "would be" if dry_run else "was"
+            return f"Dossier download sweep {verb} triggered (run state: {summary})"
         except Exception as e:
             return f"Error downloading dossiers: {str(e)}"
 

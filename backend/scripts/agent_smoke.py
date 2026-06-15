@@ -17,7 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description="Smoke test for the ReAct Agent Controller.")
     parser.add_argument("--goal", type=str, default="Find me a recent German tender for road construction and draft a summary.",
                         help="The goal/prompt to feed to the agent")
-    parser.add_argument("--live", action="store_true", help="Allow the agent to modify data. (By default, dry-run only)")
+    parser.add_argument("--live", action="store_true", help="Allow write-capable tools (ingest_*, download_dossiers) to hit the live API and write to the DB. By default the agent runs in dry-run/read-only mode.")
     parser.add_argument("--quiet", action="store_true", help="Suppress detailed execution logs")
     args = parser.parse_args()
 
@@ -32,18 +32,20 @@ def main():
         if not args.live:
             logger.info("Operating in dry-run/test mode without API key can only validate schema (which will fail auth).")
 
-    agent = AgentController(api_key=settings.anthropic_api_key)
+    dry_run = not args.live
+    agent = AgentController(api_key=settings.anthropic_api_key, dry_run=dry_run)
     logger.info(f"Target Goal: '{args.goal}'")
-    logger.info(f"Live mode: {args.live}")
+    logger.info(f"Live mode: {args.live} (write-capable tools dry_run={dry_run})")
+    if not dry_run:
+        logger.warning("Live mode enabled — ingest_tenders/ingest_awards/download_dossiers may hit the live TED API and write to the DB.")
 
-    # For safety: currently to actually prevent DB modifications from tools, we'd need to mock the tools
-    # or pass a param. We'll simply note it here since Agent tools might inherently be read-only mostly.
-    
     try:
         logger.info("Dispatching agent. This will call the Anthropic API...")
         result = agent.run(user_goal=args.goal)
         
         logger.info("=== Agent Run Complete ===")
+        if result.get("truncated"):
+            logger.warning("Agent hit max_turns before reaching a final answer — output is partial.")
         logger.info(f"Tool Steps Taken: {len(result['steps'])}")
         
         for i, step in enumerate(result['steps'], 1):

@@ -9,6 +9,15 @@ router = APIRouter()
 
 class AgentRequest(BaseModel):
     goal: str = Field(..., description="The instruction or goal for the Agent.")
+    dry_run: bool = Field(
+        default=True,
+        description=(
+            "When true (default), write-capable tools (ingest_tenders, "
+            "ingest_awards, download_dossiers) validate inputs and report "
+            "what would happen without hitting the live TED API or writing "
+            "to the database. Set to false to allow live writes."
+        ),
+    )
 
 class AgentStep(BaseModel):
     tool: str
@@ -18,6 +27,7 @@ class AgentResponse(BaseModel):
     goal: str
     steps: List[AgentStep]
     output: str
+    truncated: bool = False
 
 @router.post("/run", response_model=AgentResponse)
 def run_agent(request: AgentRequest):
@@ -33,16 +43,17 @@ def run_agent(request: AgentRequest):
             detail="Server is not configured with an ANTHROPIC_API_KEY."
         )
 
-    agent = AgentController(api_key=settings.anthropic_api_key)
-    
+    agent = AgentController(api_key=settings.anthropic_api_key, dry_run=request.dry_run)
+
     try:
         # Run the tool-loop
         result = agent.run(user_goal=request.goal)
-        
+
         return AgentResponse(
             goal=result["goal"],
             steps=[AgentStep(tool=step["tool"], args=step["args"]) for step in result["steps"]],
-            output=result["output"]
+            output=result["output"],
+            truncated=result.get("truncated", False)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent execution failed: {str(e)}")

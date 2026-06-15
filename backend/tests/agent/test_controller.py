@@ -55,6 +55,23 @@ class MockClient:
     def __init__(self, *args, **kwargs):
         self.messages = MockMessages()
 
+
+class EndlessToolUseMessages:
+    """Always asks for another tool call — never reaches `end_turn`.
+
+    Used to exercise the max_turns guard without a real multi-turn
+    conversation.
+    """
+
+    def create(self, *args, **kwargs):
+        return mock_anthropic_message_tool_use()
+
+
+class EndlessToolUseClient:
+    def __init__(self, *args, **kwargs):
+        self.messages = EndlessToolUseMessages()
+
+
 @patch("anthropic.Anthropic", new=MockClient)
 @patch("app.agent.controller.dispatch_tool")
 @patch("app.agent.controller.SessionLocal")
@@ -89,3 +106,71 @@ def test_agent_controller_tool_loop(mock_session_local, mock_dispatch):
     
     # 4. Verify it was correctly saved to the DB
     mock_db_session.add.assert_called_once()
+
+
+@patch("anthropic.Anthropic", new=MockClient)
+@patch("app.agent.controller.dispatch_tool")
+@patch("app.agent.controller.SessionLocal")
+def test_agent_controller_defaults_to_dry_run(mock_session_local, mock_dispatch):
+    """
+    AgentController must default to dry_run=True and forward it to
+    dispatch_tool, so a casual chat goal can't trigger live writes
+    (live TED polls / dossier downloads / DB writes) by accident.
+    """
+    mock_dispatch.return_value = "Mocked result from DB"
+
+    mock_db_session = MagicMock()
+    mock_session_local.return_value.__enter__.return_value = mock_db_session
+
+    agent = AgentController(api_key="dummy_key_for_test")
+    assert agent.dry_run is True
+
+    agent.run(user_goal="Find me a tender")
+
+    mock_dispatch.assert_called_once()
+    _, kwargs = mock_dispatch.call_args
+    assert kwargs["dry_run"] is True
+
+
+@patch("anthropic.Anthropic", new=MockClient)
+@patch("app.agent.controller.dispatch_tool")
+@patch("app.agent.controller.SessionLocal")
+def test_agent_controller_forwards_explicit_live_mode(mock_session_local, mock_dispatch):
+    """An explicit dry_run=False must reach dispatch_tool unchanged."""
+    mock_dispatch.return_value = "Mocked result from DB"
+
+    mock_db_session = MagicMock()
+    mock_session_local.return_value.__enter__.return_value = mock_db_session
+
+    agent = AgentController(api_key="dummy_key_for_test", dry_run=False)
+    agent.run(user_goal="Ingest today's tenders for real")
+
+    _, kwargs = mock_dispatch.call_args
+    assert kwargs["dry_run"] is False
+
+
+@patch("anthropic.Anthropic", new=EndlessToolUseClient)
+@patch("app.agent.controller.dispatch_tool")
+@patch("app.agent.controller.SessionLocal")
+def test_agent_controller_truncates_gracefully_after_max_turns(mock_session_local, mock_dispatch):
+    """
+    A plan that never reaches `end_turn` must stop after `max_turns` and
+    return partial results — not raise and 500 the request.
+    """
+    mock_dispatch.return_value = "Mocked result from DB"
+
+    mock_db_session = MagicMock()
+    mock_session_local.return_value.__enter__.return_value = mock_db_session
+
+    agent = AgentController(api_key="dummy_key_for_test", max_turns=3)
+    result = agent.run(user_goal="Loop forever")
+
+    # Should not raise — returns partial progress with a truncation flag.
+    assert result["truncated"] is True
+    assert "max_turns" not in result["output"]  # human-readable note, not the raw attr name
+    assert "stopped after 3 turns" in result["output"]
+    assert len(result["steps"]) == 3
+
+    # The (truncated) run is still persisted for the reflection loop.
+    mock_db_session.add.assert_called_once()
+    mock_db_session.commit.assert_called_once()

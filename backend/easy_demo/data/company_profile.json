@@ -1,34 +1,51 @@
 {
   "company_name": "Bembé Parkett GmbH & Co. KG",
-  "source_role": "winner",
-  "overall_description": "A German small enterprise identified as the winning tenderer for the Bad Soden fire station parquet works. The historical award indicates capability in parquet flooring, floor covering works, sports parquet flooring, and entrance mat installation.",
+  "source_role": "seller",
+  "overall_description": "Bembé Parkett GmbH & Co. KG is a German specialist flooring contractor with proven experience in public procurement. The company delivers high-quality parquet and floor covering works for public buildings including fire stations, schools, sports halls, municipal offices, and residential projects. With certified craftsmanship, GAEB-compliant documentation, and a track record of awarded public contracts, Bembé Parkett targets mid-sized flooring projects across Germany.",
   "capability_profiles": {
-    "construction": "Specialized construction finishing contractor for parquet and flooring works, including upright lamella oak parquet, sports parquet sprung flooring, and entrance mat systems for public building projects.",
-    "it": "",
-    "hybrid": "Construction finishing profile with limited evidence for digital or system-integration work in the uploaded notice."
+    "construction": "Bembé Parkett is a certified specialist contractor for flooring and floor covering works in public and commercial construction projects. Core competencies include: upright lamella oak parquet installation, floating and glued hardwood parquet systems, sports parquet sprung floor construction for gymnasiums and multi-purpose halls, floor sanding and surface finishing, entrance mat systems with ribbed and coconut-fibre inserts, floor levelling and substrate preparation, vinyl and resilient floor covering, cork flooring, as well as renovation and replacement of existing parquet and wooden floors. The company has extensive experience working within public procurement frameworks, delivering projects compliant with VOB (Vergabe- und Vertragsordnung für Bauleistungen), submitting GAEB-format bills of quantities, and fulfilling documentation requirements including ESPD, trade register extracts, and professional association clearance. Typical project types include: new public building construction (fire stations, schools, kindergartens, administrative buildings), sports facility flooring, residential social housing, hospital corridor flooring, and cultural building interiors. The company operates as a subcontractor or direct tenderer for general contractors and public authorities.",
+    "it": "Bembé Parkett does not offer IT or digital services. The company focuses exclusively on physical flooring installation and construction finishing works.",
+    "hybrid": "For construction projects with both flooring and minor building works components, Bembé Parkett can deliver the floor covering scope as part of a larger multi-trade contract. Relevant hybrid scenarios include: new public building construction with combined flooring and carpentry scope, sports hall refurbishment covering flooring and wall panelling, and public building renovation projects requiring both floor levelling and parquet installation."
   },
   "qualifications": [
     "Parquet flooring works",
     "Floor covering works",
+    "Sports parquet sprung flooring",
+    "Entrance mat installation",
     "Public procurement documentation capability",
-    "GAEB bill of quantities submission"
+    "GAEB bill of quantities submission",
+    "VOB-compliant project delivery",
+    "ESPD (European Single Procurement Document) submission",
+    "Trade registration (Handwerkskammer)",
+    "Professional association clearance certificate",
+    "Tax and social security clearance"
   ],
-  "regions": [
+  "target_regions": [
     "Germany",
+    "Bayern",
+    "Baden-Württemberg",
+    "Hessen",
+    "Nordrhein-Westfalen",
+    "Rheinland-Pfalz",
     "Bad Soden am Taunus",
     "Main-Taunus-Kreis",
-    "Bad Mergentheim"
+    "Bad Mergentheim",
+    "Frankfurt",
+    "Stuttgart",
+    "Würzburg",
+    "Heilbronn",
+    "Mannheim"
   ],
-  "budget_range_wan": {
-    "min": null,
-    "max": null
+  "target_deal_size_eur": {
+    "min": 30000,
+    "max": 500000
   },
   "budget_range_original": {
     "observed_awarded_contract_value": 101980.05,
     "currency": "EUR"
   },
   "typical_delivery": {
-    "construction": "On-site parquet and flooring delivery for public building construction projects.",
-    "it": "No IT capability evidence in the uploaded notice."
+    "construction": "On-site parquet and floor covering installation for public building construction and renovation projects, compliant with VOB and GAEB documentation standards.",
+    "it": "Not applicable."
   }
 }

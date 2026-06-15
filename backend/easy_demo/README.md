@@ -1,363 +1,341 @@
-# Tender GTM Pipeline Demo / 投标 GTM 流水线 Demo
+# Tender GTM Lead Scoring Pipeline
 
-## 1. Project Overview / 项目简介
+A Go-To-Market pipeline that monitors EU public tender portals, identifies buyer organisations, scores them as sales leads, and produces ranked, email-ready output for business development teams.
 
-This project is a demo pipeline for matching **one company profile** with multiple public tender opportunities.
-
-本项目是一个用于 **单个公司匹配多个招标项目** 的 GTM demo。系统会根据公司能力、招标描述、预算、地区、资质和工期等信息，判断每个 tender 是否值得投标。
-
-The current version supports:
-
-- Semantic similarity scoring
-- Rule-based business scoring
-- Construction / IT dual-domain Logistic Regression
-- Manual sales weight adjustment
-- Explainable recommendation output
-- JSON output for dashboard or frontend usage
-
-当前版本支持：
-
-- 语义相似度打分
-- 业务规则打分
-- Construction / IT 双领域逻辑回归模型
-- Sales 人工调权模拟
-- 可解释推荐结果
-- 输出 JSON 文件供 dashboard 或前端使用
+The system adopts a **seller perspective**: given one vendor profile and a feed of public tenders, it answers "which buyers are worth reaching out to, and in what order?"
 
 ---
 
-## 2. Project Structure / 项目结构
+## Project Structure
 
 ```text
 easy_demo/
-├── tender_pipeline.py
+├── tender_pipeline.py       # Main pipeline entry point
+├── evaluation.py            # Metrics: PR-AUC, Precision@K, Recall@K, Lift@K
+├── baselines.py             # Baseline rankers for comparison
+├── cross_validation.py      # Expanding-window time-series CV
+├── calibration.py           # Sigmoid / isotonic probability calibration
+├── diagnostics.py           # Feature diagnostics and data quality report
 ├── requirements.txt
 ├── README.md
-└── data/
-    ├── tenders.json
-    └── company_profile.json
+├── data/
+│   ├── tenders.json             # Input: EU tender records
+│   ├── company_profile.json     # Input: vendor (seller) profile
+│   ├── human_feedback.jsonl     # Human-in-the-loop feedback log
+│   └── scores_output.json       # Output: ranked lead list
+├── models/
+│   ├── lead_scoring_pipeline.joblib   # Saved model
+│   ├── model_metadata.json
+│   ├── model_report.json              # Full training report
+│   ├── feature_diagnostics.json
+│   └── data_quality_report.json
+└── tests/
+    └── test_pipeline.py         # pytest suite (21 tests)
 ```
 
-After running the pipeline, the following file will be generated:
+---
 
-运行程序后会生成：
+## Architecture Overview
 
 ```text
-data/scores_output.json
+EU Tender Feed (tenders.json)
+        │
+        ▼
+ Feature Engineering
+   ├── semantic_score      MiniLM cosine: buyer need vs vendor offering
+   ├── budget_score        Buyer budget vs vendor target deal size
+   ├── region_score        Buyer location vs vendor target markets
+   ├── urgency_score       Deadline proximity (sweet-spot window)
+   └── competition_score   Fewer competing bids = easier entry
+        │
+        ▼
+ Lead Scoring Model
+   ├── Class-weight comparison   (None / balanced / custom)
+   ├── Classifier comparison     (LR / RandomForest / HistGradientBoosting)
+   ├── Expanding-window time CV  (no future data leakage)
+   └── Probability calibration   (sigmoid / isotonic)
+        │
+        ▼
+ Final Priority Score
+   = α × model_probability + β × business_rule_score + human_adjustment
+   + geographic tier bonus (primary German markets)
+   + hard-rule post-processing (IT domain filter, region penalty)
+        │
+        ▼
+ Output: ranked leads + email_context per buyer → scores_output.json
 ```
 
 ---
 
-## 3. Input Files / 输入文件
+## Input Files
 
-### 3.1 `data/company_profile.json`
+### `data/company_profile.json`
 
-This file describes the target company.
+Describes **your company as a seller** — what you offer, where you operate, and what deal sizes you target.
 
-该文件描述目标公司的能力画像。
+Key fields:
 
-Example fields:
-
-```json
-{
-  "company_name": "某科技工程有限公司",
-  "overall_description": "...",
-  "capability_profiles": {
-    "construction": "...",
-    "it": "...",
-    "hybrid": "..."
-  },
-  "qualifications": [],
-  "regions": [],
-  "budget_range_wan": {
-    "min": 80,
-    "max": 600
-  },
-  "typical_delivery": {
-    "construction": "...",
-    "it": "..."
-  }
-}
-```
-
-### 3.2 `data/tenders.json`
-
-This file contains multiple tender opportunities.
-
-该文件包含多个招标项目。
-
-Example fields:
-
-```json
-[
-  {
-    "tender_id": "T-001",
-    "domain": "construction",
-    "project_name": "...",
-    "project_description": "...",
-    "budget_cny_wan": 320,
-    "region": "上海",
-    "deadline_days": 42,
-    "qualification_requirements": [],
-    "result": 1
-  }
-]
-```
-
----
-
-## 4. Pipeline Logic / 流水线逻辑
-
-The pipeline contains the following steps:
-
-系统主要流程如下：
-
-```text
-1. Load tenders.json and company_profile.json
-2. Compute semantic similarity between tender description and company capability profile
-3. Compute rule-based scores:
-   - budget_match
-   - region_match
-   - qual_match
-   - days_norm
-4. Merge all scores into a feature vector
-5. Train construction and IT Logistic Regression models
-6. Score each tender
-7. Output recommendation labels and explainable top factors
-8. Simulate manual sales weight adjustment
-9. Write results to data/scores_output.json
-```
-
-中文解释：
-
-```text
-1. 加载 tenders.json 和 company_profile.json
-2. 计算 tender 描述和公司能力之间的语义相似度
-3. 计算规则分数：
-   - 预算匹配
-   - 地区匹配
-   - 资质匹配
-   - 工期/截止时间分数
-4. 合并成机器学习特征向量
-5. 分别训练 construction 和 IT 逻辑回归模型
-6. 对每个 tender 打分
-7. 输出推荐标签和可解释因素
-8. 模拟 Sales 人工调权
-9. 写出 data/scores_output.json
-```
-
----
-
-## 5. Scoring Features / 打分特征
-
-The model uses the following features:
-
-模型使用以下特征：
-
-| Feature | Meaning | 中文含义 |
-|---|---|---|
-| `semantic_score` | Semantic similarity between tender and company capability | 招标描述与公司能力的语义相似度 |
-| `budget_match` | Whether the tender budget fits the company budget range | 预算是否匹配公司项目规模 |
-| `region_match` | Whether the tender location matches company regions | 地区是否匹配公司覆盖范围 |
-| `qual_match` | Whether company qualifications match tender requirements | 公司资质是否满足招标要求 |
-| `days_norm` | Normalized deadline or delivery time score | 工期/截止时间归一化分数 |
-
----
-
-## 6. Recommendation Labels / 推荐标签
-
-The final probability is converted into a business recommendation:
-
-最终分数会转换成业务推荐标签：
-
-| Probability | Label |
+| Field | Description |
 |---|---|
-| `>= 0.70` | Strongly Recommend / 强烈建议投标 |
-| `>= 0.50` | Recommend / 建议投标 |
-| `>= 0.35` | Consider / 可考虑 |
-| `< 0.35` | Not Recommended / 不建议投标 |
+| `company_name` | Vendor name |
+| `capability_profiles` | Rich text descriptions per domain (`construction`, `it`, `hybrid`). Quality here directly determines `semantic_score` accuracy. Expand these descriptions to cover all vocabulary your buyers might use. |
+| `target_regions` | List of regions/countries you serve |
+| `target_deal_size_eur` | `{ "min": 30000, "max": 500000 }` |
+
+### `data/tenders.json`
+
+A list of EU public tender records. Each tender represents a potential buyer lead.
+
+Key fields:
+
+| Field | Description |
+|---|---|
+| `tender_id` | Unique identifier |
+| `domain` | `"construction"` / `"it"` / `"hybrid"` |
+| `project_description` | Full text used for semantic scoring |
+| `buyer` | Organisation that issued the tender (your sales target) |
+| `budget_original` | `{ "amount": 101980.05, "currency": "EUR" }` |
+| `region` | Buyer location |
+| `deadline_days` | Days until submission deadline |
+| `received_tenders` | Number of competing bids already received |
+| `engagement` | Training label: `1` = buyer engaged after outreach, `0` = ignored. Leave `null` for unlabeled records. |
+| `label_source` | `"observed_outcome"` / `"human_review"` / `"imported_history"` / `"synthetic"` |
+| `published_at` | ISO date string — used for chronological train/val/test split |
 
 ---
 
-## 7. Installation / 安装依赖
+## Scoring Logic
 
-Create and activate a virtual environment if needed:
+### Five features
 
-可以先创建并激活虚拟环境：
+| Feature | Meaning |
+|---|---|
+| `semantic_score` | MiniLM cosine similarity between buyer's project description and vendor's capability profile. High = buyer needs what you sell. |
+| `budget_score` | How well buyer's budget matches your target deal size range. Scores 1.0 inside the range, decays outside. |
+| `region_score` | 1.0 if buyer is in your target markets, 0.2 otherwise. |
+| `urgency_score` | Peaks at 1–30 days remaining. Too close (≤3 days) or too far (>180 days) scores lower. |
+| `competition_score` | Fewer competing bids = higher score. `null` received_tenders = 0.8 (open opportunity). |
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
+### Final priority score
+
+```
+final_priority_score
+  = α × model_probability          (default α = 0.70)
+  + β × business_rule_score        (default β = 0.30)
+  + human_adjustment               (range: –0.30 to +0.30)
+  + geographic_bonus               (+0.04 for primary German markets)
 ```
 
-Install dependencies:
+Three scoring modes are supported: `model_only`, `business_only`, `hybrid`. The pipeline auto-selects the best mode by PR-AUC on the development set.
 
-安装依赖：
+**Note:** `final_priority_score` is a ranking signal, not a calibrated probability. Use `calibrated_probability` if you need a probability estimate.
+
+### Priority labels
+
+| Score | Label |
+|---|---|
+| ≥ 0.70 | High Priority |
+| ≥ 0.50 | Medium Priority |
+| ≥ 0.35 | Low Priority |
+| < 0.35 | Skip |
+
+### Hard-rule post-processing
+
+Leads that are structurally incompatible with the vendor profile are penalised regardless of model score:
+
+- IT domain tender with `semantic_score < 0.20` → capped at 0.20
+- Out-of-region AND `semantic_score < 0.15` → capped at 0.25
+
+---
+
+## Training
+
+### Label strategy
+
+The pipeline supports four label sources with different training weights:
+
+| `label_source` | Training weight | When to use |
+|---|---|---|
+| `observed_outcome` | 1.0 | Buyer actually replied / booked a meeting / converted |
+| `imported_history` | 0.8 | Historical CRM records imported in bulk |
+| `human_review` | 0.4 | Sales team manually reviewed and labelled |
+| `synthetic` | 0.2 | Weak supervision rules (keyword-based auto-labelling) |
+
+Real `observed_outcome` labels always outweigh synthetic ones. **The model becomes reliable once 50+ real engagement labels are collected.**
+
+### Train / val / test split
+
+```text
+All labeled data
+├── Development set (earliest 80%)
+│   └── Expanding-window time CV (5 folds, no future leakage)
+└── Holdout test set (latest 20%) — never used for parameter selection
+```
+
+### Semantic scoring
+
+Set `USE_MINILM = True` (default) to use `all-MiniLM-L6-v2` for semantic scoring (~10s load time). Set `USE_MINILM = False` to fall back to TF-IDF bigram cosine (faster, offline, lower quality).
+
+---
+
+## Human-in-the-Loop Feedback
+
+Sales teams can record outreach outcomes via `create_feedback()`. Feedback is appended to `data/human_feedback.jsonl` and automatically merged into training labels on the next run.
+
+```python
+from tender_pipeline import create_feedback, append_feedback
+
+feedback = create_feedback(
+    scored_lead=result,          # output dict from score_lead()
+    reviewer_id="sales_alice",
+    reviewer_decision="approve",
+    contacted=True,
+    replied=True,
+    meeting_booked=False,
+    converted_to_opportunity=False,
+)
+append_feedback(feedback)
+```
+
+Valid `reviewer_decision` values: `approve`, `reject`, `increase_priority`, `decrease_priority`, `unsure`.
+
+---
+
+## Evaluation Metrics
+
+The pipeline reports the following metrics on both validation and holdout test sets:
+
+| Metric | Description |
+|---|---|
+| ROC-AUC | Overall ranking quality |
+| PR-AUC | Precision-recall tradeoff (primary metric for imbalanced data) |
+| Precision@K | Fraction of true positives in top-K leads |
+| Recall@K | Fraction of all positives captured in top-K leads |
+| Lift@K | Precision@K / positive_rate — how much better than random |
+| Brier score | Calibration quality of probability outputs |
+
+Baseline comparison includes: random, positive-rate constant, semantic-only, business-rule-only, model probability, and final priority score.
+
+---
+
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-If `requirements.txt` does not exist, install manually:
+Core dependencies: `numpy`, `scikit-learn`, `joblib`, `sentence-transformers`.
 
-如果还没有 `requirements.txt`，可以手动安装：
-
-```bash
-pip install numpy scikit-learn sentence-transformers
-```
-
-If you do not want to download MiniLM, set this in `tender_pipeline.py`:
-
-如果不想下载 MiniLM 模型，可以在 `tender_pipeline.py` 里设置：
-
-```python
-USE_MINILM = False
-```
-
-Then the system will use TF-IDF cosine similarity instead.
-
-这样系统会使用 TF-IDF cosine similarity 作为离线替代方案。
+To skip MiniLM download, set `USE_MINILM = False` in `tender_pipeline.py` and run without `sentence-transformers`.
 
 ---
 
-## 8. Run / 运行方式
-
-From the project folder, run:
-
-在项目文件夹下运行：
+## Running
 
 ```bash
 python3 tender_pipeline.py
 ```
 
-Expected output:
-
-预期输出包括：
+Expected terminal output:
 
 ```text
-[Load/加载]
-[Semantic/语义]
-[Feature Scoring / 特征打分]
-[LR Training / LR 训练]
-[Default Scoring / 默认评分]
-[Complete/完成] Results written to data/scores_output.json
+[Load] 1500 tenders | Vendor: ...
+[MiniLM] Loading all-MiniLM-L6-v2
+[Lead Scoring]
+[ClassWeight] Best class_weight by dev PR-AUC: ...
+[Classifier Comparison] → Best classifier: ...
+[Cross-Validation Summary] ...
+[Calibration] Best method: ...
+[Baseline Comparison Table] ...
+[Top leads] ...
+=== MODEL REPORT SUMMARY ===
 ```
 
 ---
 
-## 9. Output / 输出结果
+## Running Tests
 
-The pipeline writes the final results to:
-
-程序会输出结果到：
-
-```text
-data/scores_output.json
+```bash
+cd easy_demo
+python3 -m pytest tests/test_pipeline.py -v
 ```
 
-Each result contains:
+21 tests cover: time CV data leakage prevention, holdout isolation, per-fold scaler refitting, group split buyer isolation, single-class fold handling, calibration safety, baseline metric correctness, sample weight assignment, and model save/load consistency.
 
-每条结果包含：
+---
+
+## Output
+
+### `data/scores_output.json`
+
+Ranked list of buyer leads. Each entry includes:
 
 ```json
 {
-  "tender_id": "T-001",
-  "features": {
-    "semantic_score": 0.82,
-    "budget_match": 1.0,
-    "region_match": 1.0,
-    "qual_match": 1.0,
-    "days_norm": 0.7
-  },
-  "default": {
-    "score": 88.5,
-    "recommend": "Strongly Recommend / 强烈建议投标",
-    "top_factors": []
-  },
-  "adjusted": {},
-  "rec_weights": {}
+  "tender_id": "T-00278",
+  "buyer": "Vienna Municipal Services",
+  "domain": "construction",
+  "region": "Vienna, Austria",
+  "budget_eur": 108592,
+  "model_probability": 0.988,
+  "calibrated_probability": 0.988,
+  "business_rule_score": 0.618,
+  "human_adjustment": 0.0,
+  "final_priority_score": 0.98,
+  "final_priority_score_100": 98.0,
+  "priority": "High Priority",
+  "filter_reason": null,
+  "top_factors": [...],
+  "email_context": {
+    "buyer_name": "Vienna Municipal Services",
+    "project_name": "...",
+    "project_description": "...",
+    "region": "Vienna, Austria",
+    "budget_eur": 108592,
+    "deadline_days": 45
+  }
 }
 ```
 
----
+The `email_context` block is designed to be passed directly to an LLM for personalised outreach email generation.
 
-## 10. Current Capability / 当前代码能实现什么
+### `models/model_report.json`
 
-The current demo can:
-
-当前 demo 可以实现：
-
-- Load one company profile and multiple tender records
-- Score each tender-company match
-- Combine semantic similarity and business rules
-- Train simple Logistic Regression models
-- Produce recommendation scores
-- Explain important scoring factors
-- Simulate manual sales weight adjustment
-- Export results to JSON
-
-中文总结：
-
-```text
-当前代码已经能实现：
-一个公司扫描多个 tender，
-并结合语义匹配、预算、地区、资质和工期，
-输出每个 tender 的投标推荐分数和推荐理由。
-```
+Full training report including CV results, baseline comparison, calibration metrics, selected threshold strategy, feature diagnostics, and recommended production mode.
 
 ---
 
-## 11. Limitations / 当前限制
+## Current Performance (Weak Supervision Labels)
 
-This is a demo version, so it still has several limitations:
+| Metric | Value |
+|---|---|
+| PR-AUC (test) | 0.60 |
+| ROC-AUC (test) | 0.85 |
+| Precision@10 | 0.60 |
+| Recall@20 | 0.50 |
+| Lift@10 | 4.6× |
+| CV PR-AUC mean ± std | 0.23 ± 0.10 |
+| Brier score | 0.078 |
 
-这是一个 demo 版本，因此还有一些限制：
-
-1. The current version supports one company only.
-2. The dataset is small and mainly used for demonstration.
-3. Logistic Regression coefficients are not reliable with very few samples.
-4. Qualification matching is still based on simple text overlap.
-5. Region matching is based on simple string matching.
-6. Budget handling is simplified and mainly supports `budget_cny_wan`.
-7. Semantic score gives a number but does not yet explain detailed item-to-item matches.
-8. There is no frontend dashboard yet.
-
-中文：
-
-```text
-当前版本主要适合学校 project demo，
-还不能直接作为真实生产系统使用。
-```
+**Caveat:** Current labels are generated by weak supervision rules (keyword matching), not real sales observations. The CV vs test gap (0.23 vs 0.60) indicates the model has learned the labelling rules rather than true buyer behaviour. Performance figures will be meaningful once 50+ real `observed_outcome` labels are collected.
 
 ---
 
-## 12. Future Improvements / 后续优化方向
+## Limitations
 
-Possible next steps:
-
-后续可以优化：
-
-- Support multiple companies with `companies.json`
-- Rank tenders for each company
-- Add real historical tender-company pair data
-- Add requirement-item and capability-item level matching
-- Improve qualification taxonomy
-- Normalize currencies such as EUR, DKK and CNY
-- Add evaluation metrics such as accuracy, recall, AUC and top-k hit rate
-- Build a frontend dashboard
-- Add more explainable AI output
-
-中文总结：
-
-```text
-下一步可以把系统升级成：
-多个公司 → 每个公司扫描所有 tender → 给每家公司推荐最值得投的项目。
-```
+1. All current training labels are synthetic (weak supervision). Real engagement data is required for reliable predictions.
+2. The IT capability profile is empty — all IT-domain tenders are systematically down-scored. Populate `capability_profiles.it` to change this.
+3. The CV / test PR-AUC gap (0.23 vs 0.60) indicates overfitting to the weak labelling rules.
+4. `final_priority_score = 100.0` for many top leads because `model_probability` saturates at 0.96+; real data will spread scores more meaningfully.
+5. Region and budget scoring relies on string matching and fixed EUR conversion rates.
 
 ---
 
-## 13. Notes / 备注
+## Roadmap
 
-This project is designed as a school project demo for GTM tender recommendation and machine learning-based opportunity matching.
-
-本项目是一个学校项目 demo，用于展示如何用机器学习和语义匹配方法做 GTM 投标机会推荐。
+- Collect 50+ real `observed_outcome` labels via Sales feedback to make model metrics trustworthy
+- Populate `capability_profiles.it` to enable IT-domain scoring
+- Connect to live EU TED portal feed for automated tender ingestion
+- Build a lightweight frontend dashboard consuming `scores_output.json`
+- Add LLM-powered personalised email generation using `email_context` fields
+- Support multiple vendor profiles for agency or multi-client use cases

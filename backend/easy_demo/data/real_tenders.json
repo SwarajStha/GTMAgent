@@ -1,0 +1,75 @@
+[
+  {
+    "tender_id": "TED-326506-2026",
+    "domain": "construction",
+    "project_name": "Facilities for the Army's Heavy Brigade (FHTB) - Vordingborg Barracks - Building 171",
+    "project_description": "Main construction contract for facilities at Vordingborg Barracks in Denmark. The project includes Building 171 of approximately 3,625 m2 with a garage for 18 spaces, three floors with classrooms, personnel facilities, storage and technical rooms, plus a military obstacle course, perimeter fence expansion, rainwater basin and parking area.",
+    "budget_cny_wan": null,
+    "budget_original": {
+      "amount": 76436279.0,
+      "currency": "DKK",
+      "type": "awarded_contract_value"
+    },
+    "region": "Vordingborg, Denmark",
+    "deadline_days": 480,
+    "duration_original": "16 months",
+    "qualification_requirements": [
+      "Prequalification required",
+      "Confidentiality declaration required before classified tender material is released"
+    ],
+    "buyer": "Etablissement- og Terrænkommandoen",
+    "winner": "LM Byg og KT Erhvervsbyg Konsortiet",
+    "received_tenders": 5,
+    "result": 0
+  },
+  {
+    "tender_id": "TED-326509-2026",
+    "domain": "construction",
+    "project_name": "Neubau Feuerwache Parkettarbeiten",
+    "project_description": "Parquet flooring works for the new fire station and associated residential building in Bad Soden am Taunus, Germany. The work includes approximately 1,300 m2 upright lamella oak parquet, approximately 60 m2 sports parquet sprung floor, and entrance mats with ribbed and coconut-fibre materials.",
+    "budget_cny_wan": null,
+    "budget_original": {
+      "amount": 101980.05,
+      "currency": "EUR",
+      "type": "awarded_contract_value"
+    },
+    "region": "Bad Soden am Taunus, Germany",
+    "deadline_days": 83,
+    "duration_original": "2026-07-21 to 2026-10-12",
+    "qualification_requirements": [
+      "GAEB priced bill of quantities",
+      "PQ number or self-declaration of suitability / ESPD",
+      "Trade registration or commercial register extract",
+      "Entry in craft register or chamber of commerce",
+      "Tax and social security clearance certificates",
+      "Professional association clearance certificate"
+    ],
+    "buyer": "Der Magistrat der Stadt Bad Soden am Taunus",
+    "winner": "Bembé Parkett GmbH & Co. KG",
+    "received_tenders": 8,
+    "result": 1
+  },
+  {
+    "tender_id": "TED-326536-2026",
+    "domain": "hybrid",
+    "project_name": "Trafostation - UKSH Lübeck",
+    "project_description": "Turnkey delivery and construction of a compact transformer station for a PV project at the UKSH Campus Lübeck. The procurement includes a transformer station lot, cable trenches and surface restoration lot, and medium-voltage connection works into the existing MV network.",
+    "budget_cny_wan": null,
+    "budget_original": {
+      "amount": 240000.0,
+      "currency": "EUR",
+      "type": "estimated_value_excluding_VAT"
+    },
+    "region": "Lübeck, Germany",
+    "deadline_days": 233,
+    "duration_original": "2026-06-01 to 2027-01-20",
+    "qualification_requirements": [
+      "Complete suitability evidence required",
+      "Offers without complete suitability evidence may be excluded"
+    ],
+    "buyer": "Stadtwerke Lübeck Energie GmbH",
+    "winner": null,
+    "received_tenders": 0,
+    "result": 0
+  }
+]

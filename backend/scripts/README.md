@@ -11,6 +11,30 @@ Current contents:
 
 ---
 
+## One-time test database setup
+
+The DB-touching tests in `backend/tests/ingestion/test_dossier_downloader.py` (and any future tests that use the `db_session` fixture from `backend/tests/conftest.py`) need a separate Postgres database named `gtm_test`. This is intentional — tests freely `CREATE`, `DROP`, and roll back transactions on it, and we don't want that anywhere near your dev data.
+
+The fixtures don't auto-create the database itself (Postgres doesn't allow `CREATE DATABASE` inside a transaction, and we'd need elevated permissions). One-time setup, with the dev container running:
+
+```powershell
+docker exec gtmagent-db-1 psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
+docker exec gtmagent-db-1 psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
+```
+
+After that, the test fixtures handle everything (schema create/drop, per-test rollback). Verify with:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest tests/ingestion/test_dossier_downloader.py -v
+```
+
+You should see 14 tests pass. If the suite errors out with `database "gtm_test" does not exist`, you missed the `CREATE DATABASE` step above.
+
+The connection string is configurable via `DATABASE_URL_TEST` in `backend/.env` if you want to point at a different host/db — default is `postgresql+psycopg://gtm:gtm@localhost:5432/gtm_test`.
+
+---
+
 ## ted_smoke.py
 
 End-to-end exerciser for the Phase 2 / Job 1 TED Contract Notice poller. Useful for:
@@ -322,3 +346,60 @@ When adding another diagnostic / maintenance script:
 - Log via the standard `logging` module — not `print()` — and call `logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")` once at the top of `main()`
 - Document it in this README with a flag table + sample output
 - Keep destructive operations (writes, truncates) behind an explicit flag like `--live` so accidental invocation is harmless
+
+---
+
+## agent_smoke.py
+
+End-to-end exerciser for the ReAct Agent Controller (`AgentController`). Exercises the Anthropic API loop and confirms exactly how the agent translates a query into a sequence of tool dispatches. 
+
+Useful for:
+- Validating your `ANTHROPIC_API_KEY` configuration.
+- Verifying the `messages` and `tools` schema definitions conform properly to Anthropic's Tool Use API strict validation requirements.
+- Inspecting exactly what the agent decides to invoke to accomplish a task.
+
+### Prerequisites
+
+You need a valid `ANTHROPIC_API_KEY` loaded in `backend/.env`.
+
+### Running
+
+From the **repo root** (`c:\dev\GTMAgent`) with the venv active:
+
+```powershell
+# Default prompt
+python backend\scripts\agent_smoke.py
+
+# Custom goal
+python backend\scripts\agent_smoke.py --goal "Can you search the database for IT services tenders?"
+
+# Quiet mode (only final output)
+python backend\scripts\agent_smoke.py --quiet
+```
+
+### Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--goal "... text ..."` | default test objective | The instruction provided to the Agent. |
+| `--live` | off | **Allows write-capable tools to run for real.** Without this flag (the default), `AgentController(dry_run=True)` makes `ingest_tenders` / `ingest_awards` / `download_dossiers` validate inputs and report what *would* happen without hitting the live TED API or writing to the DB — same `dry_run=` plumbing as `ted_smoke.py`/`awards_smoke.py`. Pass `--live` to flip `dry_run=False` and allow real TED polls / dossier downloads / DB writes as a side effect of whatever plan the model comes up with. |
+| `--quiet` | off | Suppress Python logging, outputting only the Agent's final text payload. |
+
+**Safety note**: a chat-style goal like "find me a recent German tender" can
+cause the model to *plan* a live ingestion or download as a side effect.
+`dry_run=True` (the default for both this script and the `/api/v1/agent/run`
+endpoint) is what keeps that safe to experiment with — only pass `--live`
+when you actually want the agent to write to the DB / hit the TED API.
+
+### Reading the output
+
+You should see log outputs detailing initial API dispatch followed by:
+
+```
+2026-05-31 10:15:00 INFO __main__ === Agent Run Complete ===
+2026-05-31 10:15:00 INFO __main__ Tool Steps Taken: 1
+2026-05-31 10:15:00 INFO __main__   [1] Tool: query_db | Args: {'sql_query': 'SELECT * FROM tenders;'}
+2026-05-31 10:15:00 INFO __main__ === Final Agent Output ===
+
+I have searched the available records based on your parameters...
+```

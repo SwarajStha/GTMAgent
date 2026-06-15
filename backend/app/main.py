@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(matches.router, prefix="/api/v1/matches", tags=["matches"])
     app.include_router(emails.router, prefix="/api/v1/emails", tags=["emails"])
     app.include_router(feedback.router, prefix="/api/v1/feedback", tags=["feedback"])
+    app.include_router(agent.router, prefix="/api/v1/agent", tags=["agent"])
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:

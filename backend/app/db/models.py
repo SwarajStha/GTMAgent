@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -63,7 +64,7 @@ class Tender(Base):
     )
     document_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_restricted: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=func.false(), default=False
+        Boolean, nullable=False, server_default=false(), default=False
     )
     raw_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(
@@ -138,19 +139,36 @@ class Award(Base):
     )
 
 
-class Document(Base, TimestampMixin):
+class Document(Base):
+    """One row per attempted-or-completed dossier download.
+
+    `tender_id` is UNIQUE — at most one document row per tender. The
+    upsert path in `dossier_downloader` keys on this constraint.
+
+    Two boolean flags carry independent meaning:
+      * `is_restricted` — this specific document URL returned 401/403.
+      * `download_failed` — non-auth failure (timeout, 5xx, non-PDF body).
+    """
+
     __tablename__ = "documents"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tender_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("tenders.id"), nullable=False, index=True
+        Integer, ForeignKey("tenders.id"), unique=True, index=True, nullable=False
     )
-    filename: Mapped[str] = mapped_column(Text, nullable=False)
-    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
-    is_restricted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    is_restricted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    download_failed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    downloaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True, default=None
+    )
 
     tender: Mapped[Tender] = relationship(back_populates="documents")
 
@@ -241,3 +259,15 @@ class Embedding(Base, TimestampMixin):
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     model_name: Mapped[str] = mapped_column(String(64), nullable=False)
     vector: Mapped[list[float]] = mapped_column(Vector(768), nullable=False)
+
+
+class AgentRun(Base, TimestampMixin):
+    """Tracks Claude agent execution sessions for the reflection loop."""
+    __tablename__ = "agent_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    steps: Mapped[list | dict | None] = mapped_column(JSONB, nullable=True)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)

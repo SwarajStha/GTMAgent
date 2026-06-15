@@ -31,7 +31,10 @@ def main():
         },
         # Based on previous errors, 'fields' is required and must not contain unsupported fields
         "fields": [
-            "publication-number" 
+            "publication-number",
+            "tendering-party-name",
+            "organisation-country-buyer",
+            "description-glo"
         ]
     }
 
@@ -57,6 +60,10 @@ def main():
             
             print(f"\n✅ Request successful! Matched {total} total results, returning {len(results)} on this page.")
             
+            if results:
+                print("\n--- 📦 Raw JSON Response for the first item ---")
+                print(json.dumps(results[0], indent=2, ensure_ascii=False))
+
             # 2. Extract and display the most useful fields
             print("\n--- 🎟️ Extracted useful information examples ---")
             for item in results:

@@ -5,6 +5,8 @@ and the dispatch logic to call internal backend modules.
 """
 from __future__ import annotations
 
+import re
+
 # Tools schema definitions for Anthropic API
 AGENT_TOOLS = [
     {
@@ -41,7 +43,10 @@ AGENT_TOOLS = [
     },
     {
         "name": "download_dossiers",
-        "description": "Attempt to download missing PDF dossiers/documents for all eligible tenders (bulk sweep).",
+        "description": (
+            "Attempt to download missing PDF dossiers/documents for all "
+            "eligible tenders (bulk sweep)."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {}
@@ -49,7 +54,10 @@ AGENT_TOOLS = [
     },
     {
         "name": "find_matches",
-        "description": "Run the matching pipeline for a given tender to find the top company matches.",
+        "description": (
+            "Run the matching pipeline for a given tender to find the top "
+            "company matches."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -82,7 +90,10 @@ AGENT_TOOLS = [
     },
     {
         "name": "query_db",
-        "description": "Run a read-only SQL query against the tracking database (e.g. 'SELECT * FROM tenders LIMIT 5').",
+        "description": (
+            "Run a read-only SQL query against the tracking database "
+            "(e.g. 'SELECT * FROM tenders LIMIT 5')."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -95,6 +106,43 @@ AGENT_TOOLS = [
         }
     }
 ]
+
+# Write / DDL verbs that must never run through the read-only `query_db` tool.
+# Matched as whole words (\b) so legitimate identifiers like `created_at`,
+# `updated_at`, or a `comment` column are NOT rejected. The previous guard used
+# a plain substring check, which blocked every timestamp column on the PR #7
+# tables (e.g. `SELECT created_at FROM tenders` tripped the `"create"` token).
+# See docs/branch_review_agent_controller.md (query_db gap).
+_FORBIDDEN_SQL_KEYWORDS = re.compile(
+    r"\b(insert|update|delete|drop|alter|truncate|create)\b",
+    re.IGNORECASE,
+)
+
+
+def _read_only_sql_error(sql: str) -> str | None:
+    """Return a human-readable reason if `sql` is not a safe read-only query.
+
+    The primary gate is that the statement is a single `SELECT`; the keyword
+    blocklist is defence-in-depth (a write would already have to get past the
+    leading-SELECT and single-statement checks). Returns ``None`` when the
+    query is acceptable.
+
+    Note: a forbidden verb appearing inside a string literal (e.g.
+    ``WHERE status = 'create'``) is still rejected — an accepted, rare
+    trade-off for keeping the blocklist simple without a full SQL parser.
+    """
+    stripped = sql.strip().rstrip(";").strip()
+    if not stripped:
+        return "query was empty"
+    if ";" in stripped:
+        return "only a single statement is allowed"
+    if not stripped.lower().startswith("select"):
+        return "only SELECT queries are allowed"
+    match = _FORBIDDEN_SQL_KEYWORDS.search(stripped)
+    if match:
+        return f"keyword '{match.group(0).lower()}' is not allowed in a read-only query"
+    return None
+
 
 def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True) -> str:
     """Dispatches the tool call to the actual backend logic.
@@ -110,22 +158,22 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
     if tool_name == "query_db":
         from sqlalchemy import text
 
-        sql = str(tool_args.get("sql_query", "")).strip()
-        sql_l = sql.lower()
-        forbidden = (";", "insert", "update", "delete", "drop", "alter", "truncate", "create")
-        if not sql_l.startswith("select") or any(tok in sql_l for tok in forbidden):
-            return "Error executing query: only single-statement SELECT queries are allowed."
+        sql = str(tool_args.get("sql_query", ""))
+        reason = _read_only_sql_error(sql)
+        if reason is not None:
+            return f"Error executing query: {reason}."
 
         try:
-            # Prevent unbounded results from bloating tool outputs.
-            rows = session.execute(text(sql)).mappings().fetchmany(50)
+            # Strip a trailing semicolon (allowed) and cap results so a large
+            # table can't bloat the tool output fed back to the model.
+            rows = session.execute(text(sql.strip().rstrip(";"))).mappings().fetchmany(50)
             return str([dict(row) for row in rows])
         except Exception as e:
             return f"Error executing query: {str(e)}"
-    
+
     elif tool_name == "ingest_tenders":
-        from app.ingestion.ted_client import poll_contract_notices
         from app.core.config import get_settings
+        from app.ingestion.ted_client import poll_contract_notices
         try:
             days = tool_args.get("days_back", 1)
             settings = get_settings()
@@ -140,8 +188,8 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
             return f"Error ingesting tenders: {str(e)}"
 
     elif tool_name == "ingest_awards":
-        from app.ingestion.awards_client import backfill_awards
         from app.core.config import get_settings
+        from app.ingestion.awards_client import backfill_awards
         try:
             # The back-fill is month-granular — the tool schema asks the
             # model for months directly so "look back 1 day" can't silently
@@ -176,7 +224,8 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
             tender_id = tool_args["tender_id"]
             # top_n logic is usually handled inside or after run()
             pipeline = MatchingPipeline()
-            # This requires pipeline.run to be fully implemented, catching potential NotImplementedErrors
+            # Requires pipeline.run to be fully implemented; the except below
+            # catches the NotImplementedError the current stub raises.
             matches = pipeline.run(tender_id=tender_id)
             return f"Matching complete for tender {tender_id}. {len(matches)} matches found."
         except Exception as e:
@@ -186,7 +235,7 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
         try:
             from app.generation.drafter import EmailDrafter
             match_id = tool_args["match_id"]
-            # To draft properly, we should fetch evidence for the match_id from DB, 
+            # To draft properly, we should fetch evidence for the match_id from DB,
             # for now passing a mock or letting drafter handle it.
             drafter = EmailDrafter()
             result = drafter.draft(evidence={"match_id": match_id, "notes": "evidence goes here"})
@@ -194,4 +243,7 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
         except Exception as e:
             return f"Error drafting email: {str(e)}"
 
-    return f"Tool {tool_name} executed successfully with args: {tool_args} (Mocked response for layout)"
+    return (
+        f"Tool {tool_name} executed successfully with args: {tool_args} "
+        "(Mocked response for layout)"
+    )

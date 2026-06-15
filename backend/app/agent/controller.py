@@ -1,15 +1,17 @@
 """Agent Controller — Claude tool-use orchestrator."""
 from __future__ import annotations
 
-import json
 from typing import Any
-import anthropic
-from app.db.session import SessionLocal
-from app.db.models import AgentRun
-from app.agent.tools import AGENT_TOOLS, dispatch_tool
 
-SYSTEM_PROMPT = """You are the GTM Agent Orchestrator. 
-Your goal is to fulfill user requests related to public procurement matching by executing a sequence of tool calls.
+import anthropic
+
+from app.agent.tools import AGENT_TOOLS, dispatch_tool
+from app.db.models import AgentRun
+from app.db.session import SessionLocal
+
+SYSTEM_PROMPT = """You are the GTM Agent Orchestrator.
+Your goal is to fulfill user requests related to public procurement matching
+by executing a sequence of tool calls.
 1. Formulate a plan.
 2. Execute proper tools.
 3. Review the outputs.
@@ -53,7 +55,7 @@ class AgentController:
             {"role": "user", "content": user_goal}
         ]
 
-        steps_taken = []
+        steps_taken: list[dict[str, Any]] = []
         final_output = ""
         truncated = False
 
@@ -95,7 +97,13 @@ class AgentController:
                     for block in response.content:
                         if block.type == "tool_use":
                             tool_name = block.name
-                            tool_args = block.input
+                            # The SDK types `block.input` as `object`; a tool
+                            # input is always a JSON object, so normalise it to
+                            # a dict for typed dispatch and a well-formed
+                            # AgentStep in the response.
+                            tool_args: dict[str, Any] = (
+                                block.input if isinstance(block.input, dict) else {}
+                            )
 
                             steps_taken.append({"tool": tool_name, "args": tool_args})
 

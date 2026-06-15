@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_db
 from app.api.v1.emails import generate_email, get_email
+from app.db.models import CompanyProfile, Document, Match, Tender
 from app.main import app
 
 MATCH_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -65,10 +66,16 @@ def _match(**overrides: object) -> SimpleNamespace:
 
 
 def _document(**overrides: object) -> SimpleNamespace:
+    # Mirror the real `Document` columns (no `filename` / `text_content` /
+    # `created_at` exist on the model — those names previously masked a bug
+    # that only surfaced against a real schema; see test_generate_email_writes_real_draft).
     base = {
         "id": DOCUMENT_ID,
-        "filename": "notice.pdf",
-        "text_content": "Tender asks for digital permitting and BIM coordination.",
+        "tender_id": 1,
+        "source_url": "https://ted.europa.eu/dossier/source.pdf",
+        "storage_path": "/storage/dossiers/326612-2026/notice.pdf",
+        "extracted_text": "Tender asks for digital permitting and BIM coordination.",
+        "downloaded_at": datetime(2026, 6, 1, tzinfo=UTC),
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -99,7 +106,11 @@ def _assign_email_defaults(email: object) -> None:
 
 def test_generate_email_creates_draft() -> None:
     db = MagicMock()
-    db.execute.return_value.first.return_value = (_match(), _tender(), _company_profile())
+    db.execute.return_value.tuples.return_value.first.return_value = (
+        _match(),
+        _tender(),
+        _company_profile(),
+    )
     db.scalars.return_value.all.return_value = [_document()]
     db.refresh.side_effect = _assign_email_defaults
 
@@ -118,7 +129,11 @@ def test_generate_email_creates_draft() -> None:
 
 def test_generate_email_endpoint_returns_json() -> None:
     db = MagicMock()
-    db.execute.return_value.first.return_value = (_match(), _tender(), _company_profile())
+    db.execute.return_value.tuples.return_value.first.return_value = (
+        _match(),
+        _tender(),
+        _company_profile(),
+    )
     db.scalars.return_value.all.return_value = [_document()]
     db.refresh.side_effect = _assign_email_defaults
     app.dependency_overrides[get_db] = lambda: db
@@ -137,7 +152,7 @@ def test_generate_email_endpoint_returns_json() -> None:
 
 def test_generate_email_raises_404_when_match_missing() -> None:
     db = MagicMock()
-    db.execute.return_value.first.return_value = None
+    db.execute.return_value.tuples.return_value.first.return_value = None
 
     with pytest.raises(HTTPException) as exc_info:
         generate_email(MATCH_ID, db=db)
@@ -165,3 +180,56 @@ def test_get_email_raises_404_when_missing() -> None:
         get_email(EMAIL_ID, db=db)
 
     assert exc_info.value.status_code == 404
+
+
+def test_generate_email_writes_real_draft(db_session) -> None:
+    """End-to-end against a real Postgres schema.
+
+    The mock-based tests above pass even when the handler references columns
+    that don't exist on the ORM model (e.g. the old `Document.created_at` /
+    `.text_content` / `.filename`). This exercises the actual query + evidence
+    collection against `app.db.models` so that kind of schema drift fails loudly.
+    """
+    tender = Tender(
+        ted_notice_id="326612-2026",
+        title="Digital permitting platform",
+        buyer_name="City Buyer",
+        buyer_country="DE",
+        cpv_codes=["72000000"],
+        budget_eur=1_500_000.0,
+        raw_json={"source": "test"},
+    )
+    company = CompanyProfile(name="BuildFlow Systems", country="DE")
+    db_session.add_all([tender, company])
+    db_session.flush()
+
+    match = Match(
+        tender_id=tender.id,
+        company_id=company.id,
+        semantic_score=0.94,
+        budget_score=0.88,
+        location_score=0.97,
+        qualification_score=0.91,
+        final_score=0.93,
+        explanation="Strong product overlap with buyer needs.",
+    )
+    document = Document(
+        tender_id=tender.id,
+        source_url="https://ted.europa.eu/dossier/source.pdf",
+        storage_path="/storage/dossiers/326612-2026/notice.pdf",
+        extracted_text="Tender asks for digital permitting and BIM coordination.",
+        downloaded_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    db_session.add_all([match, document])
+    db_session.flush()
+
+    response = generate_email(match.id, db=db_session)
+
+    assert response.match_id == match.id
+    assert response.status == "draft"
+    assert response.company.name == "BuildFlow Systems"
+    assert response.tender.ted_notice_id == "326612-2026"
+    assert response.evidence is not None
+    snippets = response.evidence["document_snippets"]
+    assert snippets[0]["filename"] == "notice.pdf"
+    assert "digital permitting" in snippets[0]["snippet"]

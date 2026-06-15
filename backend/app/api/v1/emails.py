@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -104,19 +105,31 @@ def _find_match_context(
         .join(Tender, Match.tender_id == Tender.id)
         .join(CompanyProfile, Match.company_id == CompanyProfile.id)
         .where(Match.id == match_id)
-    ).first()
+    ).tuples().first()
 
 
-def _document_snippets(documents: list[Document]) -> list[dict[str, str]]:
+def _document_label(document: Document) -> str:
+    """Best-effort display name for an evidence snippet's source file.
+
+    The `Document` model has no `filename` column; derive a human-readable
+    label from the stored file path (preferred) or the source URL.
+    """
+    if document.storage_path:
+        return document.storage_path.replace("\\", "/").rsplit("/", 1)[-1]
+    tail = document.source_url.split("?")[0].split("#")[0].rstrip("/").rsplit("/", 1)[-1]
+    return tail or document.source_url
+
+
+def _document_snippets(documents: Sequence[Document]) -> list[dict[str, str]]:
     snippets: list[dict[str, str]] = []
     for document in documents:
-        text = (document.text_content or "").strip()
+        text = (document.extracted_text or "").strip()
         if not text:
             continue
         snippets.append(
             {
                 "document_id": str(document.id),
-                "filename": document.filename,
+                "filename": _document_label(document),
                 "snippet": text[:500],
             }
         )
@@ -127,7 +140,7 @@ def _collect_evidence(
     match: Match,
     tender: Tender,
     company: CompanyProfile,
-    documents: list[Document],
+    documents: Sequence[Document],
 ) -> dict[str, Any]:
     return {
         "match_id": str(match.id),
@@ -199,7 +212,7 @@ def generate_email(
     documents = db.scalars(
         sa.select(Document)
         .where(Document.tender_id == tender.id)
-        .order_by(Document.created_at.desc())
+        .order_by(Document.downloaded_at.desc().nulls_last())
         .limit(3)
     ).all()
     evidence = _collect_evidence(match, tender, company, documents)

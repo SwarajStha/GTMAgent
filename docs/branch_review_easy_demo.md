@@ -137,3 +137,27 @@ scoring math (semantic mapping curve, rule sub-scores, LR + explain pattern,
 label thresholds) into `app/matching/{semantic,rules,lr_weights}.py`, redesign
 the iteration direction and embedder around our actual schema/ensemble, and
 decide the "domain" question before committing to the dual-LR-model split.
+
+---
+
+## Update (2026-06-15) — there is now a consumer waiting for the port
+
+Since this review was written, PR #7 landed the MVP API + frontend (see
+[branch_review_backend_api.md](branch_review_backend_api.md)). That changes
+the priority calculus for porting this spike:
+
+- **The `matches` read path and `MatchesView` UI already exist** and are
+  wired front-to-back — they just have no data because
+  `MatchingPipeline.run()` is still a stub. Porting this spike into the
+  pipeline (so it writes real `matches` rows) immediately lights up the
+  matches dashboard, the email `/generate` endpoint, the feedback loop, **and**
+  the agent's `find_matches` tool (PR #5). It's the single highest-leverage
+  piece of work right now.
+- **Confirm the company-pool target before porting.** The matches table FKs
+  `company_id → company_profiles` (UUID, the Phase-5 "scraped capability
+  profiles" table — currently empty), *not* the `companies` table the awards
+  job fills. This spike builds its company profile from an award winner
+  (*Bembé Parkett*), which suggests the intended bridge: award-winner
+  `companies` → derived `company_profiles` → matched against new tenders.
+  Decide and document that bridge as part of the port — it's Gap #2 in the
+  backend-API review.

@@ -279,18 +279,24 @@ done (see Integration pass). What's left:
    in this integration pass touched this on purpose — it's a sequencing
    problem, not a structural one, and the fix is "build the matching
    pipeline / drafter," not "patch the agent."
-2. **`query_db`'s safety check is a naive substring blocklist**, not a real
+2. ✅ ~~**`query_db`'s safety check is a naive substring blocklist**, not a real
    SQL-safety mechanism. E.g. a query selecting the `documents.downloaded_at`
    or any `updated_at` column would trip the `"update"` substring check; a
-   `WHERE comment LIKE '%insert%'` would too. It also still executes the
-   full query server-side before truncating to 50 rows via `fetchmany` —
-   fine at our current data volume (a handful of rows per table) but not a
-   real safety limit. A read-only DB role, or a proper SQL parser
-   (`sqlglot`) checking statement type, would be more robust long-term —
-   not urgent at this scale, but worth a comment/TODO so it isn't mistaken
-   for a real security boundary. *(Not changed in this pass — judged lower
-   priority than the dry-run/max-turns fixes, which gate actual writes
-   rather than just reads.)*
+   `WHERE comment LIKE '%insert%'` would too.~~ **Fixed 2026-06-15 on
+   `fix/integration-fix-for-merged-PRs`.** The substring check is now a
+   word-boundary regex (`\b(insert|update|delete|drop|alter|truncate|create)\b`)
+   extracted into a testable `_read_only_sql_error(sql)` helper, so
+   `created_at` / `updated_at` / a `comment` column no longer false-positive.
+   The primary gate is still "must be a single leading `SELECT`" (trailing
+   semicolon allowed, internal `;` rejected); the keyword list is now explicitly
+   documented as defence-in-depth. Covered by `tests/agent/test_tools.py` (17
+   unit cases + 2 real-DB round-trips proving `SELECT created_at`/`updated_at`
+   execute and a `DELETE` is rejected). **Still open (lower priority):** it
+   executes the query server-side before truncating to 50 rows via `fetchmany`
+   (fine at our data volume), and a forbidden verb inside a *string literal*
+   (`WHERE status = 'create'`) is still rejected — both noted in code comments.
+   A read-only DB role or a real SQL parser (`sqlglot`) remains the robust
+   long-term answer.
 3. **The reflection loop is built but not wired into anything.**
    `reflector.py` is a standalone script with a `__main__` block — no
    APScheduler hook (Job 4 is still pending), no API endpoint, and nothing
@@ -332,3 +338,31 @@ two most interesting tools have something real to call. Once that's in,
 revisit Remaining gaps #2–#5 (SQL guardrails, reflection-loop wiring,
 live-API test coverage, typed step args) as polish passes — none of them
 block a working demo the way the matching/drafting stubs currently do.
+
+---
+
+## Update (2026-06-15) — interplay with the MVP API branch (PR #7)
+
+PR #7 (MVP backend APIs + frontend, see
+[branch_review_backend_api.md](branch_review_backend_api.md)) landed after
+this review. Two points of interplay worth tracking:
+
+- **`draft_email` now has a working non-LLM alternative to route through.**
+  The new `POST /emails/{match_id}/generate` endpoint contains a deterministic
+  evidence→draft template (`_draft_from_evidence`) that doesn't need the
+  stubbed `EmailDrafter`. The agent's `draft_email` tool still calls the stub
+  and still errors. When Phase 4 makes `EmailDrafter` real, route the
+  endpoint, the agent tool, **and** the deterministic fallback through one
+  shared code path (backend-API review Gap #3) rather than leaving three
+  divergent drafters.
+- **`find_matches` still blocked by the same stub, but now with a visible
+  consumer.** The `/matches` API and `MatchesView` are built and waiting on
+  `MatchingPipeline.run()`. Implementing the matching pipeline (the easy_demo
+  port) unblocks the agent tool and the dashboard in one move — confirming
+  Remaining Gap #1 as the top priority.
+- **`query_db` substring-blocklist caveat is now concrete:** PR #7's tables
+  expose `created_at` / `updated_at` columns widely, so a perfectly valid
+  `SELECT created_at FROM tenders` trips the `"create"`/`"update"` substring
+  check. Still low-priority (reads only), but it now actively blocks common
+  queries — worth the `sqlglot`/read-only-role fix sooner than "someday."
+  **→ Fixed 2026-06-15** (word-boundary regex + tests); see Remaining gap #2.

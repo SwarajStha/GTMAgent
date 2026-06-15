@@ -11,6 +11,8 @@ MODULES = [
     "app.core.logging",
     "app.api.deps",
     "app.api.v1.tenders",
+    "app.api.v1.awards",
+    "app.api.v1.companies",
     "app.api.v1.matches",
     "app.api.v1.emails",
     "app.api.v1.feedback",

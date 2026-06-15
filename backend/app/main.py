@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import emails, feedback, matches, tenders, agent
+from app.api.v1 import agent, awards, companies, emails, feedback, matches, tenders
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -33,6 +33,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(tenders.router, prefix="/api/v1/tenders", tags=["tenders"])
+    app.include_router(awards.router, prefix="/api/v1/awards", tags=["awards"])
+    app.include_router(companies.router, prefix="/api/v1/companies", tags=["companies"])
     app.include_router(matches.router, prefix="/api/v1/matches", tags=["matches"])
     app.include_router(emails.router, prefix="/api/v1/emails", tags=["emails"])
     app.include_router(feedback.router, prefix="/api/v1/feedback", tags=["feedback"])

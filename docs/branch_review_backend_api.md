@@ -245,8 +245,11 @@ for at least one happy-path-against-real-DB case each.
 
 ### 8. 🟢 Minor
 
-- CORS is hardcoded to `http://localhost:5173` — fine for dev, will need an
-  env-driven origin list before any non-local deployment.
+- ~~CORS is hardcoded to `http://localhost:5173`~~ **Fixed 2026-06-15** —
+  now driven by the `CORS_ORIGINS` setting (comma-separated, default
+  `http://localhost:5173`), parsed via `Settings.cors_origins_list` mirroring
+  the `allowed_cpv_codes`/`cpv_code_list` pattern. `main.py` reads it instead
+  of a literal list. Covered by `tests/test_config.py`.
 - `recipientFor()` in `emails.ts` fabricates `sales@<website-domain>` as the
   recipient — clearly a placeholder; real outreach needs a real contact
   source.

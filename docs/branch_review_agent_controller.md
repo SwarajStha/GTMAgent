@@ -317,12 +317,21 @@ done (see Integration pass). What's left:
    only paths that touch the real API — neither runs in CI. Worth at least
    a CI-skippable "live" test class gated behind `ANTHROPIC_API_KEY`
    presence, the way `ted_smoke.py --live` is gated.
-5. **Response model loses type information.** `AgentStep.args:
-   dict[str, Any]` flattens whatever typed value the LLM provided (e.g.
-   `tender_id` is declared `integer` in the tool schema, but comes back as
-   an untyped dict entry in the API response) — fine for a debug view, but
-   worth keeping in mind if the frontend ever needs to act on `steps`
-   programmatically rather than just display them.
+5. ✅ ~~**Response model loses type information.** `AgentStep.args:
+   dict[str, Any]` flattens whatever typed value the LLM provided.~~
+   **Addressed 2026-06-15 on `fix/integration-fix-for-merged-PRs`.** The
+   args are genuinely heterogeneous per tool, so `dict[str, Any]` is kept as
+   the honest type (a per-tool typed union would be over-engineering — the
+   field types live in the tool schemas). The real fix was upstream: the SDK
+   types `block.input` as `object`, which flowed untyped into `dispatch_tool`
+   (expects a `dict`) and into the response. The controller now normalises it
+   (`tool_args: dict[str, Any] = block.input if isinstance(block.input, dict)
+   else {}`) and `steps_taken` is typed `list[dict[str, Any]]`, so the step
+   args are reliably a well-formed dict and the `object`→`dict` type hole is
+   closed. `AgentStep.args` carries a comment documenting the decision.
+   (While here, the pre-existing ruff debt in `controller.py`/`agent.py` —
+   unused `import json`, `typing.List`, whitespace, an over-long
+   `SYSTEM_PROMPT` line — was cleaned up; both files are now ruff-clean.)
 
 ## Suggested next step
 

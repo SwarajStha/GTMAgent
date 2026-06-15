@@ -1,0 +1,170 @@
+{
+  "total_samples": 1500,
+  "labeled_samples": 1233,
+  "unlabeled_samples": 267,
+  "positive_count": 161,
+  "negative_count": 1072,
+  "positive_rate": 0.1306,
+  "date_range": {
+    "min": "2023-01-02T00:00:00Z",
+    "max": "2026-06-04T00:00:00Z"
+  },
+  "duplicate_tender_id_count": 0,
+  "missing_rate_per_field": {
+    "tender_id": 0.0,
+    "buyer": 0.0,
+    "region": 0.0,
+    "budget_eur": 0.0,
+    "deadline_days": 0.0,
+    "published_at": 0.0
+  },
+  "missing_rate_per_feature": {
+    "semantic_score": 0.0,
+    "budget_score": 0.0,
+    "region_score": 0.0,
+    "urgency_score": 0.0,
+    "competition_score": 0.0
+  },
+  "unique_buyer_count": 20,
+  "buyer_frequency_distribution_top20": {
+    "Milan Industrial Development Agency": 87,
+    "City of Munich": 87,
+    "Stockholm Energy Agency": 86,
+    "Athens Urban Mobility Agency": 84,
+    "Warsaw Smart City Office": 82,
+    "Lisbon Public Works Department": 82,
+    "Vienna Municipal Services": 78,
+    "Nordic Manufacturing Consortium": 78,
+    "Madrid Health Network": 77,
+    "Regional Hospital Network": 77,
+    "Danish Rail Infrastructure": 75,
+    "Public Housing Modernisation Agency": 74,
+    "Belgian Federal Procurement Office": 71,
+    "Budapest Water Utility": 70,
+    "Prague Airport Authority": 68,
+    "Paris Digital Services": 68,
+    "European Research Infrastructure Agency": 65,
+    "Central European Logistics Group": 64,
+    "Berlin Transport Authority": 64,
+    "Amsterdam Port Authority": 63
+  },
+  "domain_distribution": {
+    "construction": 468,
+    "hybrid": 371,
+    "it": 661
+  },
+  "region_distribution_top20": {
+    "Amsterdam, Netherlands": 120,
+    "Stockholm, Sweden": 100,
+    "Warsaw, Poland": 99,
+    "Vienna, Austria": 99,
+    "Prague, Czech Republic": 98,
+    "Copenhagen, Denmark": 95,
+    "Lisbon, Portugal": 95,
+    "Bavaria, Germany": 94,
+    "Budapest, Hungary": 93,
+    "North Rhine-Westphalia, Germany": 92,
+    "Milan, Italy": 89,
+    "Paris, France": 89,
+    "Brussels, Belgium": 87,
+    "Athens, Greece": 86,
+    "Berlin, Germany": 84,
+    "Madrid, Spain": 80
+  },
+  "label_distribution_by_domain": {
+    "construction": {
+      "positive": 96,
+      "negative": 189
+    },
+    "hybrid": {
+      "positive": 32,
+      "negative": 282
+    },
+    "it": {
+      "positive": 33,
+      "negative": 601
+    }
+  },
+  "label_distribution_by_buyer_top20": {
+    "Milan Industrial Development Agency": {
+      "positive": 12,
+      "negative": 56
+    },
+    "City of Munich": {
+      "positive": 5,
+      "negative": 65
+    },
+    "Stockholm Energy Agency": {
+      "positive": 8,
+      "negative": 67
+    },
+    "Athens Urban Mobility Agency": {
+      "positive": 8,
+      "negative": 62
+    },
+    "Warsaw Smart City Office": {
+      "positive": 9,
+      "negative": 55
+    },
+    "Lisbon Public Works Department": {
+      "positive": 11,
+      "negative": 56
+    },
+    "Vienna Municipal Services": {
+      "positive": 11,
+      "negative": 52
+    },
+    "Nordic Manufacturing Consortium": {
+      "positive": 5,
+      "negative": 64
+    },
+    "Madrid Health Network": {
+      "positive": 6,
+      "negative": 56
+    },
+    "Regional Hospital Network": {
+      "positive": 8,
+      "negative": 57
+    },
+    "Danish Rail Infrastructure": {
+      "positive": 11,
+      "negative": 50
+    },
+    "Public Housing Modernisation Agency": {
+      "positive": 10,
+      "negative": 47
+    },
+    "Belgian Federal Procurement Office": {
+      "positive": 7,
+      "negative": 49
+    },
+    "Budapest Water Utility": {
+      "positive": 6,
+      "negative": 53
+    },
+    "Prague Airport Authority": {
+      "positive": 6,
+      "negative": 53
+    },
+    "Paris Digital Services": {
+      "positive": 7,
+      "negative": 44
+    },
+    "European Research Infrastructure Agency": {
+      "positive": 11,
+      "negative": 42
+    },
+    "Central European Logistics Group": {
+      "positive": 8,
+      "negative": 48
+    },
+    "Berlin Transport Authority": {
+      "positive": 7,
+      "negative": 46
+    },
+    "Amsterdam Port Authority": {
+      "positive": 5,
+      "negative": 50
+    }
+  }
+}

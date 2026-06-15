@@ -185,6 +185,12 @@ class CompanyProfile(Base, TimestampMixin):
     capabilities: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     certifications: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
+    # Provenance + idempotent upsert key when a profile is derived from an
+    # award-winner `companies` row (Layer 1 supplier-pool builder). NULL for
+    # profiles created another way (e.g. future web scraping).
+    source_company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), unique=True, index=True, nullable=True
+    )
 
     matches: Mapped[list["Match"]] = relationship(back_populates="company")
 

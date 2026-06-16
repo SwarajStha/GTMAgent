@@ -216,3 +216,33 @@ def get_match(
     ).all()
     base = _match_out(match, tender, company).model_dump()
     return MatchDetailOut(**base, emails=[_email_summary(email) for email in emails])
+
+
+class MatchRunResultOut(BaseModel):
+    """Result of running the matching pipeline for one tender."""
+
+    tender_id: int
+    count: int
+    matches: list[dict[str, Any]]
+
+
+@router.post("/run/{tender_id}")
+def run_matching(
+    tender_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    top_n: Annotated[int | None, Query(ge=1, le=200)] = None,
+) -> MatchRunResultOut:
+    """Rank the company-profile pool for a tender and persist `matches`.
+
+    Runs synchronously: the first call loads MiniLM (~10s, then cached). Returns
+    the ranked result; fetch full rows afterwards via `GET /matches?tender_id=`.
+    """
+    tender = db.get(Tender, tender_id)
+    if tender is None:
+        raise HTTPException(status_code=404, detail="Tender not found")
+
+    # Imported here so the matching/ML stack is only pulled when matching runs.
+    from app.matching.pipeline import MatchingPipeline
+
+    results = MatchingPipeline().run(tender_id, session=db, top_n=top_n)
+    return MatchRunResultOut(tender_id=tender_id, count=len(results), matches=results)

@@ -230,6 +230,14 @@ class Email(Base, TimestampMixin):
     match_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("matches.id"), nullable=False, index=True
     )
+    # 'supplier' (per-match outreach to the matched company) or 'buyer'
+    # (per-tender digest to the tender issuer, anchored to its top match).
+    recipient_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="supplier", default="supplier"
+    )
+    tender_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("tenders.id"), nullable=True, index=True
+    )
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

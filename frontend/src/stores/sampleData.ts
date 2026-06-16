@@ -39,6 +39,13 @@ export interface MatchItem {
   evidence: string[]
 }
 
+export interface RecommendedSupplier {
+  name: string
+  country: string | null
+  finalScore: number
+  explanation: string | null
+}
+
 export interface EmailDraft {
   id: string
   matchId: string
@@ -50,6 +57,8 @@ export interface EmailDraft {
   updatedAt: string
   body: string
   evidence: string[]
+  recipientType?: 'supplier' | 'buyer'
+  recommendedSuppliers?: RecommendedSupplier[]
 }
 
 export const tenders: TenderItem[] = [

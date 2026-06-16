@@ -116,6 +116,27 @@ export const useMatchesStore = defineStore('matches', {
         this.loading = false
       }
     },
+    async runMatching(tenderId: string, topN?: number) {
+      this.loading = true
+      this.error = null
+      try {
+        const query = topN ? `?top_n=${topN}` : ''
+        const response = await fetch(`/api/v1/matches/run/${tenderId}${query}`, {
+          method: 'POST',
+        })
+        if (!response.ok) {
+          throw new Error(`Run matching returned ${response.status}`)
+        }
+        // Refresh the full match list so the new rows show up in the view.
+        await this.fetchAll()
+        this.source = 'api'
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Run matching failed'
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
     async submitFeedback(matchId: string, rating: FeedbackRating, comment?: string) {
       this.feedbackLoading = true
       this.feedbackError = null

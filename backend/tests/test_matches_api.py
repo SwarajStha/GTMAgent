@@ -4,14 +4,14 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_db
-from app.api.v1.matches import get_match, list_matches
+from app.api.v1.matches import get_match, list_matches, run_matching
 from app.main import app
 
 MATCH_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -131,3 +131,30 @@ def test_get_match_raises_404_when_missing() -> None:
         get_match(MATCH_ID, db=db)
 
     assert exc_info.value.status_code == 404
+
+
+def test_run_matching_404_when_tender_missing() -> None:
+    db = MagicMock()
+    db.get.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        run_matching(999, db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+def test_run_matching_delegates_to_pipeline_and_shapes_result() -> None:
+    db = MagicMock()
+    db.get.return_value = _tender()
+    canned = [
+        {"company_id": str(COMPANY_ID), "company_name": "Floor Pros", "final_score": 0.9},
+    ]
+
+    with patch("app.matching.pipeline.MatchingPipeline") as pipeline_cls:
+        pipeline_cls.return_value.run.return_value = canned
+        response = run_matching(1, db=db, top_n=3)
+
+    assert response.tender_id == 1
+    assert response.count == 1
+    assert response.matches[0]["company_name"] == "Floor Pros"
+    pipeline_cls.return_value.run.assert_called_once_with(1, session=db, top_n=3)

@@ -85,6 +85,7 @@ def _email(**overrides: object) -> SimpleNamespace:
     base = {
         "id": EMAIL_ID,
         "match_id": MATCH_ID,
+        "recipient_type": "supplier",
         "subject": "Digital permitting platform - opportunity for BuildFlow Systems",
         "body": "Hi BuildFlow Systems team,\n\nWe found a public tender.",
         "evidence": {"match_id": str(MATCH_ID)},

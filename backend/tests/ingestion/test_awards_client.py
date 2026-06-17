@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Award, Company
 from app.ingestion.awards_client import backfill_awards
-from app.ingestion.entity_resolution import normalise_name, resolve_or_create
+from app.ingestion.entity_resolution import (
+    clean_identifier,
+    normalise_name,
+    resolve_or_create,
+)
 from app.ingestion.schemas import AwardRow
 
 
@@ -82,6 +86,75 @@ def test_resolve_or_create_deduplication(session: Session) -> None:
     assert "Hochtief Aktiengesellschaft" in company.aliases
 
 
+# ---------- identifier (tax-id) resolution --------------------------------
+
+
+def test_clean_identifier_rejects_junk() -> None:
+    # Real ids (digit-heavy) pass through, stripped.
+    assert clean_identifier("DE123456") == "DE123456"
+    assert clean_identifier("  B88428404 ") == "B88428404"
+    assert clean_identifier("HRB131774 Charlottenburg") == "HRB131774 Charlottenburg"
+    # Junk that would false-merge unrelated companies is rejected.
+    assert clean_identifier("0") is None
+    assert clean_identifier("000") is None
+    assert clean_identifier("") is None
+    assert clean_identifier(None) is None
+    assert clean_identifier("keine Angabe") is None  # textual placeholder
+    assert clean_identifier("n/a") is None
+    assert clean_identifier("123") is None  # too few digits
+
+
+def test_resolve_by_identifier_merges_name_variants(session: Session) -> None:
+    # Same tax id, names that do NOT normalise alike — must still be one row.
+    first = resolve_or_create(session, "Siemens AG", identifier="DE12345")
+    session.flush()
+    second = resolve_or_create(
+        session, "Siemens Mobility España", identifier="DE12345"
+    )
+    session.flush()
+
+    assert session.query(Company).count() == 1
+    assert second.id == first.id
+    assert "Siemens AG" in second.aliases
+    assert "Siemens Mobility España" in second.aliases
+
+
+def test_resolve_identifier_backfills_existing_name_match(session: Session) -> None:
+    # A row created name-only later acquires an id — backfilled, not duplicated.
+    first = resolve_or_create(session, "Hochtief GmbH")
+    session.flush()
+    assert first.registration_id is None
+
+    second = resolve_or_create(session, "Hochtief GmbH", identifier="DE999111")
+    session.flush()
+
+    assert session.query(Company).count() == 1
+    assert second.id == first.id
+    assert second.registration_id == "DE999111"
+
+
+def test_resolve_different_identifier_splits_same_name(session: Session) -> None:
+    # Same trading name, different tax ids → two distinct legal entities.
+    a = resolve_or_create(session, "Bau GmbH", identifier="AT12345")
+    session.flush()
+    b = resolve_or_create(session, "Bau GmbH", identifier="DE67890")
+    session.flush()
+
+    assert a.id != b.id
+    assert session.query(Company).count() == 2
+
+
+def test_resolve_junk_identifier_falls_back_to_name(session: Session) -> None:
+    # Junk id ("0") is ignored; name dedup still collapses to one row.
+    resolve_or_create(session, "Acme Ltd", identifier="0")
+    session.flush()
+    again = resolve_or_create(session, "Acme Ltd", identifier="0")
+    session.flush()
+
+    assert session.query(Company).count() == 1
+    assert again.registration_id is None
+
+
 # ---------- AwardRow.from_ted_response ------------------------------------
 
 
@@ -92,9 +165,15 @@ def test_from_award_response_all_fields() -> None:
     raw = {
         "publication-number": "12345-2026",
         "classification-cpv": ["45000000"],
+        "notice-title": {"eng": ["Germany – Erection works"]},
+        "description-proc": {"deu": "Holzbauarbeiten mit Dachoberlichtern"},
+        "procedure-type": "open",
+        "place-of-performance-subdiv-proc": ["DE712"],
         "buyer-name": "Stadt Frankfurt",
         "buyer-country": ["DEU"],
         "organisation-name-tenderer": {"deu": ["Hochtief AG"]},
+        "winner-identifier": ["DE811234567"],
+        "winner-country": ["DEU"],
         "BT-720-Tender": ["5000000.00"],
         "BT-720-Tender-Currency": ["EUR"],
         "BT-145-Contract": ["2026-04-15+02:00"],
@@ -104,10 +183,17 @@ def test_from_award_response_all_fields() -> None:
     assert row is not None
     assert row.ted_notice_id == "12345-2026"
     assert row.cpv_code == "45000000"
+    assert row.notice_title == "Germany – Erection works"
+    assert row.description == "Holzbauarbeiten mit Dachoberlichtern"
+    assert row.procedure_type == "open"
+    assert row.nuts_code == "DE712"
     assert row.buyer_name == "Stadt Frankfurt"
     assert row.buyer_country == "DEU"
     assert row.winner_raw_name == "Hochtief AG"
+    assert row.winner_identifier == "DE811234567"
+    assert row.winner_country == "DEU"
     assert row.contract_value_eur == 5_000_000.0
+    assert row.contract_currency == "EUR"
     assert row.award_date == date(2026, 4, 15)
     assert row.n_offers_received == 4
     assert row.raw_json == raw

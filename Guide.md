@@ -44,7 +44,7 @@ Step by step:
 
 ### Where we are today
 
-We've shipped the **ingestion** side end-to-end (Jobs 1, 2, 3). The understanding, matching, generation, and feedback layers exist as **stub files** — empty modules with the right names and import paths, ready to be filled in by you and the team.
+We've shipped **ingestion** (Jobs 1–3) plus the **matching pipeline**, a **two-sided email backend**, the full **REST API**, a **Claude tool-use agent**, and a **frontend** wired to the API. The big remaining gaps are the APScheduler loop (Job 4), the Claude understanding/`FieldExtractor` layer, LR-weight retraining from feedback, and auth — those are still stubs. The MVP's supplier profiles and email drafts are intentionally thin/deterministic; richer versions are future work.
 
 ---
 
@@ -67,37 +67,49 @@ We've shipped the **ingestion** side end-to-end (Jobs 1, 2, 3). The understandin
 ┌────────────────────────────────────────────────────────────────────┐
 │   BACKEND   —   FastAPI on Uvicorn   (localhost:8000)              │
 │   - app/main.py             create_app() factory, /health          │
-│   - app/api/v1/*.py         REST routers (stubs)                   │
-│   - app/ingestion/*.py      TED clients (LIVE)                     │
+│   - app/api/v1/*.py         REST routers (LIVE — 7 routers)        │
+│   - app/ingestion/*.py      TED clients + CLI (LIVE)               │
 │   - app/understanding/*.py  Claude field extractor (STUB)          │
-│   - app/matching/*.py       Scoring pipeline (STUB)                │
-│   - app/generation/*.py     Email drafter (STUB)                   │
-│   - app/agent/*.py          Multi-step orchestrator (STUB)         │
+│   - app/matching/*.py       Two-layer scoring pipeline (LIVE)      │
+│   - app/generation/*.py     Email drafter modules (STUB; endpoints │
+│                               draft inline in api/v1/emails.py)     │
+│   - app/agent/*.py          Claude tool-use orchestrator (LIVE)    │
 └─────────┬──────────────────────────────────┬───────────────────────┘
-          │ SQLAlchemy 2.x                   │ httpx
+          │ SQLAlchemy 2.x                   │ httpx / anthropic SDK
           ▼                                  ▼
 ┌──────────────────────────┐    ┌──────────────────────────────────┐
 │   DATABASE               │    │   EXTERNAL APIs                  │
 │   Postgres 16 + pgvector │    │   - api.ted.europa.eu  (LIVE)    │
-│   in Docker              │    │   - api.anthropic.com  (STUB)    │
-│   (localhost:5432)       │    │                                  │
+│   in Docker              │    │   - api.anthropic.com  (LIVE —   │
+│   (localhost:5432)       │    │       agent + reflection loop)   │
 └──────────────────────────┘    └──────────────────────────────────┘
 ```
 
 ### The flows that exist today
 
-1. **`GET /health`** — Frontend `HomeView.vue` fetches `/health` on page load (Vite proxies to backend:8000). Backend returns `{"status":"ok","service":"gtm-agent-backend"}`. This is the only end-to-end UI-to-backend flow currently wired up.
+1. **`GET /health`** — Frontend `HomeView.vue` fetches `/health` on page load (Vite proxies to backend:8000). Backend returns `{"status":"ok","service":"gtm-agent-backend"}`.
 
-2. **TED ingestion CLI** — A teammate or the (future) scheduler runs `python -m app.ingestion --mode contracts` or `--mode awards`. The ingestion module calls `api.ted.europa.eu` over HTTPS via `httpx`, parses the notices, and **upserts** rows into the `tenders` / `awards` / `companies` tables via SQLAlchemy. Idempotent — you can run it twice without duplicates.
+2. **TED ingestion CLI** — A teammate (or the future scheduler) runs `python -m app.ingestion --mode {contracts,awards,both}`. The ingestion module calls `api.ted.europa.eu` over HTTPS via `httpx`, parses the notices, and **upserts** rows into `tenders` / `awards` / `companies` via SQLAlchemy. Idempotent.
 
-3. **Dossier downloader** — Same CLI (`--mode contracts` with dossiers enabled by default) walks every row in `tenders` that has a `document_url`, downloads the PDF via `httpx`, validates that it really is a PDF (magic-bytes check), extracts the text with PyMuPDF, and writes a row to `documents` plus the file to `backend/storage/dossiers/<notice_id>/`.
+3. **Dossier downloader** — Same CLI (dossiers run by default; `--no-dossiers` to skip) walks every `tenders` row with a `document_url`, downloads the PDF, validates it's really a PDF (magic-bytes), extracts text with PyMuPDF, and writes a `documents` row plus the file to `backend/storage/dossiers/<notice_id>/`.
+
+4. **Matching pipeline** — `POST /api/v1/matches/run/{tender_id}` (or `MatchingPipeline().run(...)`) embeds the tender, scores every `company_profiles` row on semantic + budget + location + qualification, and persists ranked `matches`. The pool itself is built by `build_company_profiles()` from award winners.
+
+5. **Two-sided email generation** — `POST /api/v1/emails/{match_id}/generate` drafts supplier outreach; `POST /api/v1/emails/buyer/{tender_id}/generate` drafts a buyer-facing digest of a tender's top suppliers. Both are evidence-grounded (deterministic for now).
+
+6. **Feedback** — `POST /api/v1/feedback` records thumbs-up/down on a match (+ optional email) into the `feedback` table.
+
+7. **Claude agent** — `POST /api/v1/agent/run` runs a planner-executor tool loop over 6 tools (ingest/download/match/draft/query_db), persisting each run to `agent_runs`. Write-capable tools default to dry-run.
+
+8. **Frontend views** — Tenders/Matches/Emails views call the v1 API via Pinia stores (with bundled sample data as a fallback). The Matches view can trigger matching, generate supplier/buyer emails, and submit feedback.
 
 ### The flows that don't exist yet (you will build them)
 
-- **Matching pipeline trigger** — There's no endpoint or CLI to take a tender, run the scorer, and write `matches` rows yet.
-- **Email generation** — No code yet that reads a high-score match and asks Claude to draft an email.
-- **Feedback ingest** — `POST /api/v1/feedback` exists as a stub but doesn't do anything.
-- **Scheduler** — `app/ingestion/scheduler.py` is empty. APScheduler will wire the ingestion CLI to a cron-like in-process loop.
+- **Scheduler** — `app/ingestion/scheduler.py` is still a stub. APScheduler will wire the ingestion CLI to a cron-like in-process loop (daily tenders, weekly awards).
+- **Understanding layer** — no Claude `FieldExtractor` yet; the matcher reads tender columns + dossier text directly instead of a structured `TenderProfile`.
+- **LR weight retraining** — feedback is captured but nothing retrains `matches.weights` from it yet.
+- **Claude-written emails** — the email endpoints assemble drafts deterministically; swapping in a Claude call (via the `app/generation/` modules) is the planned upgrade.
+- **Richer supplier profiles** — `company_profiles` capability text is thin (name + CPV + region); enrich from dossier text / scraping later.
 
 ---
 
@@ -108,30 +120,35 @@ We've shipped the **ingestion** side end-to-end (Jobs 1, 2, 3). The understandin
 | Phase | Component | Status |
 |---|---|---|
 | **1** | Repo scaffold, DB schema, CI | ✅ Done |
-| **2 / Job 1** | TED Contract Notice poller + upsert | ✅ Done, live-verified (5 rows in DB) |
-| **2 / Job 2** | Awards back-fill + entity resolution | ✅ Done, merged to main (5 awards, 5 companies) |
-| **2 / Job 3** | Dossier downloader (PDFs) + CLI orchestrator | ✅ Code complete, live-verified (1 PDF on disk, 4 portal-locked) — PR open |
-| **2 / Job 4** | APScheduler in-process loop (daily/weekly) | ⬜ Not started |
+| **2 / Job 1** | TED Contract Notice poller + upsert | ✅ Done, live-verified |
+| **2 / Job 2** | Awards back-fill + entity resolution | ✅ Done — full 24-month back-fill (~21k awards, ~15k companies) + ML export |
+| **2 / Job 3** | Dossier downloader (PDFs) + CLI orchestrator | ✅ Done, live-verified |
+| **2 / Job 4** | APScheduler in-process loop (daily/weekly) | ⬜ Stub — not wired |
 | **2 (rest)** | Understanding — Claude field extractor + validator | ⬜ Stubs only |
-| **3** | Matching — disqualifier, embedder, semantic, rules, LR weights | ⬜ Stubs only |
-| **4** | Generation — evidence extractor, drafter, validator | ⬜ Stubs only |
-| **5** | Feedback loop + auth | ⬜ Not started |
-| **6** | Agent — Claude tool-use orchestrator | ⬜ Stubs only |
+| **3** | Matching — profile builder, disqualifier, embedder, semantic, rules | ✅ Done — multi-supplier pipeline, live-smoked |
+| **4** | Generation — two-sided email backend (supplier + buyer) | ✅ Done (deterministic drafts); Claude-written + `app/generation/` modules pending |
+| **5** | Feedback capture endpoint | ✅ Endpoint done; LR retraining + auth ⬜ pending |
+| **6** | Agent — Claude tool-use orchestrator + reflection loop | ✅ Done — planner-executor over 6 tools |
+| **—** | REST API (7 routers) + frontend integration | ✅ Done |
 
 ### How "done" was accomplished
 
-- **Database**: We use Postgres 16 with the `pgvector` extension, run in Docker. The schema is managed by Alembic migrations — three so far (`0001_initial_schema`, `0002_awards_companies`, `0003_add_documents`). Applying a migration is a single command: `alembic upgrade head`.
+- **Database**: We use Postgres 16 with the `pgvector` extension, run in Docker. The schema is managed by Alembic migrations — **eight so far** (`0001_initial_schema` → `0008_company_registration_id`). Applying them is a single command: `alembic upgrade head`. See [docs/Database_Explanation.md](docs/Database_Explanation.md) for the migration history.
 - **TED ingestion**: A FastAPI-independent module under `backend/app/ingestion/`. The crown jewels are `ted_client.py` (Contract Notices), `awards_client.py` (Award Notices + entity resolution), and `dossier_downloader.py` (PDFs). All three are exposed via a single CLI: `python -m app.ingestion`.
-- **Upsert pattern**: Every ingestion path uses Postgres's `INSERT ... ON CONFLICT (ted_notice_id) DO UPDATE ... RETURNING (xmax = 0) AS inserted`. The `xmax = 0` trick is how we distinguish "newly inserted" from "updated existing row" — Postgres sets `xmax` to 0 on a fresh insert.
-- **Entity resolution** (`entity_resolution.py`): Normalises winner names (strip punctuation, strip legal suffixes like "GmbH"/"AG"/"Ltd"), keyed on a `resolution_key`, so variant spellings of the same company collapse to one row in `companies`.
-- **Tests**: 57/57 passing locally — 28 stub-import smoke tests, 1 health check, 5 TED contract tests, 10 awards tests, 14 dossier tests. CI (GitHub Actions) runs all of them on every push.
-- **The empirically-hard TED API contract** — see [CLAUDE.md §14 and §15](CLAUDE.md) and the iteration logs there. The short version: the TED v3 expert search rejects most "obvious" field names from the docs (`cpv-code` → use `classification-cpv`, `winner-name` → use `organisation-name-tenderer`, etc.). The current `TED_FIELDS` and `AWARD_FIELDS` lists in the code were beaten into shape over multiple live iterations.
+- **Upsert pattern**: Every ingestion path uses Postgres's `INSERT ... ON CONFLICT (ted_notice_id) DO UPDATE ... RETURNING (xmax = 0) AS inserted`. The `xmax = 0` trick distinguishes "newly inserted" from "updated existing row".
+- **Entity resolution** (`entity_resolution.py`): **Identifier-first** — matches on `registration_id` (tax id from TED) when present, else on a normalised `resolution_key` (strip punctuation + legal suffixes like "GmbH"/"AG"/"Ltd"). Merges variant spellings sharing an id; splits distinct entities sharing a trading name. `clean_identifier()` rejects junk ids that would false-merge companies.
+- **Matching** (`app/matching/`): two layers — `profile_builder.build_company_profiles()` derives the `company_profiles` supplier pool from award winners; `pipeline.MatchingPipeline.run()` ranks the pool for a tender. Embedder/weights are injectable so tests run torch-free.
+- **Agent** (`app/agent/`): `controller.py` runs a Claude tool-use loop; `tools.py` defines the 6 tools + read-only `query_db` guard; `reflector.py` summarises recent runs + feedback.
+- **Tests**: ~130 passing locally across 22 files (stub imports, health, config, ingestion, matching, agent, and per-router API tests against a real `gtm_test` Postgres). CI runs them on every push.
+- **ML export**: the full awards back-fill is exported to `exports/` (`awards_training.csv`, `companies.csv`) for the lead-scoring model. The standalone scoring pipeline lives in `backend/easy_demo/`.
+- **The empirically-hard TED API contract** — the TED v3 expert search rejects most "obvious" field names from the docs (`cpv-code` → use `classification-cpv`, `winner-name` → use `organisation-name-tenderer`, etc.). The current `TED_FIELDS` and `AWARD_FIELDS` lists were beaten into shape over multiple live iterations.
 
 ### What "live verified" means here
 
-- `tenders` table has 5 real rows from `api.ted.europa.eu` (Germany, Czechia, Switzerland, France, Latvia).
-- `awards` table has 5 real rows; `companies` has 5 resolved winners.
-- `documents` table has 5 rows: 1 successful PDF download (the Swiss tender — TED's own PDF mirror) + 4 correctly-flagged failures (buyer-portal landing pages returning HTML instead of PDFs).
+- `tenders` holds real rows from `api.ted.europa.eu` (DE/CZ/CH/FR/LV in the original smoke).
+- `awards` / `companies` hold the full 24-month back-fill — **~21,015 awards / ~15,129 companies** (exported to `exports/`).
+- `documents` rows distinguish successful PDF downloads from portal-locked / non-PDF failures.
+- The matching pipeline has been live-smoked end-to-end on real data (profiles → ranked matches → buyer email) — see [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md).
 
 ---
 
@@ -165,68 +182,69 @@ We've shipped the **ingestion** side end-to-end (Jobs 1, 2, 3). The understandin
 | **GitHub Actions** | CI/CD platform | Runs three jobs on every push/PR: backend pytest, frontend lint+build, Alembic migration smoke. Config: `.github/workflows/ci.yml`. |
 | **TED v3 API** | Public EU procurement-data API | `api.ted.europa.eu` — where all our tender notices and award notices come from. No auth required. |
 | **Anthropic API** | Claude LLM hosted service | Needs `ANTHROPIC_API_KEY` in `backend/.env`. Used for extraction, drafting, and the agent layer. |
-| **sentence-transformers** *(future)* | Embedding model library | Will load three local models (MiniLM-L6, mpnet-base, multilingual-e5) on CPU for semantic similarity scoring in Phase 3. |
+| **sentence-transformers** | Embedding model library | Loads `all-MiniLM-L6-v2` (384-d) on CPU for semantic similarity in the matcher. In `requirements-ml.txt` (heavy `torch` dep), lazy-imported so the core API/tests stay torch-free. |
+| **scikit-learn / joblib** | ML toolkit | Lead-scoring pipeline (`easy_demo/`) + the planned LR weight learner. Also in `requirements-ml.txt`. |
 
 ---
 
 ## 5. Database sections (tables)
 
-We have **10 tables** across **two disconnected sub-graphs** by design. There is no FK directly linking the two halves — `awards` are NOT children of `tenders` because TED publishes Contract Notices and Contract Award Notices as separate publications.
+We have **11 tables** across **two sub-graphs**. `awards` are NOT children of `tenders` (TED publishes Contract Notices and Award Notices as separate publications), but the two halves are bridged at runtime by `company_profiles.source_company_id → companies.id` (the matcher's profile builder derives the supplier pool from award winners).
 
 See [docs/Database_Explanation.md](docs/Database_Explanation.md) for the full reference (column types, sample rows, design rationale).
 
-### Sub-graph A — Ingestion (populated today)
+### Sub-graph A — Ingestion (populated)
 
 | Table | Status | Purpose |
 |---|---|---|
-| [`tenders`](docs/Database_Explanation.md#tenders--5-rows-populated-by-job-1) | **5 rows** | Active EU procurement notices polled from TED. One row per Contract Notice. Upserted on `ted_notice_id`. |
-| [`awards`](docs/Database_Explanation.md#awards--5-rows-populated-by-job-2) | **5 rows** | Historical contract awards from TED. Who won what, for how much, when. |
-| [`companies`](docs/Database_Explanation.md#companies--5-rows-populated-by-job-2-via-entity-resolution) | **5 rows** | Canonical legal entities resolved from award winners. Variant spellings ("Hochtief AG" / "Hochtief Aktiengesellschaft") collapse to one row. |
-| [`documents`](docs/Database_Explanation.md#documents--phase-2-job-3-pending) | **5 rows** (1 PDF, 4 portal-locked) | PDF dossiers downloaded from `tenders.document_url`, with PyMuPDF-extracted text. |
+| `tenders` | **~10 rows** | Active EU procurement notices polled from TED. One row per Contract Notice. Upserted on `ted_notice_id`. |
+| `awards` | **~21k rows** | Historical contract awards from TED (full 24-month back-fill). Who won what, for how much, when — plus ML-enrichment columns (title, description, procedure type, NUTS region, currency, winner tax id). |
+| `companies` | **~15k rows** | Canonical legal entities resolved from award winners (identifier-first dedup). |
+| `documents` | **populated** | PDF dossiers downloaded from `tenders.document_url`, with PyMuPDF-extracted text. Failure flags distinguish portal-locked vs non-PDF. |
 
-### Sub-graph B — Matching, emails, feedback (empty until Phase 3+)
+### Sub-graph B — Matching, emails, feedback, agent (live)
 
 | Table | Status | Purpose |
 |---|---|---|
-| `company_profiles` | empty | The **vendors we want to pitch to**. Scraped capability profiles with 384-d MiniLM embeddings. Distinct from `companies` — different concern, different lifecycle. |
-| `matches` | empty | Scoring results. One row per (tender, company_profile) pair the pipeline considered. 4 sub-scores + final score + LR weights snapshot + explanation. |
-| `emails` | empty | LLM-generated outreach drafts. Subject, body, JSONB evidence (the passages from the dossier that grounded each claim). |
-| `feedback` | empty | Thumbs-up/thumbs-down ratings on emails. Drives LR weight retraining. |
-| `embeddings` | empty | Generic vector store, intentionally separate from `company_profiles.embedding` so we can store 768-d mpnet or 1024-d multilingual-e5 vectors too. |
-| `alembic_version` | meta | Single row tracking which migration is currently applied. Today: `0003_add_documents`. |
+| `company_profiles` | **populated** | The matchable **supplier pool** (capability text + 384-d MiniLM embedding). Derived from award winners by the profile builder (`source_company_id` bridges back to `companies`). Distinct from `companies`. |
+| `matches` | **populated** | Scoring results. One row per (tender, company_profile) pair. 4 sub-scores + final score + weights snapshot + explanation. |
+| `emails` | **populated** | Outreach drafts — `recipient_type` is `supplier` or `buyer`. Subject, body, JSONB evidence. |
+| `feedback` | live (endpoint) | Thumbs-up/thumbs-down ratings on matches/emails. Will drive LR weight retraining. |
+| `embeddings` | empty | Generic vector store, separate from `company_profiles.embedding` so we can store 768-d mpnet or 1024-d multilingual-e5 vectors too. |
+| `agent_runs` | live (agent) | One row per Claude agent execution (goal, tool steps, output). Powers the reflection loop. |
+| `alembic_version` | meta | Single row tracking the applied migration. Today: `0008_company_registration_id`. |
 
 ### Why two "company-like" tables (`companies` vs `company_profiles`)?
 
 Both exist on purpose, do not merge them.
 
-- **`companies`** (Job 2, populated): minimal legal-entity record. Created when we ingest an award and resolve the winner's name. Used as historical "who-wins-what" signal.
-- **`company_profiles`** (Phase 5, empty): the actual demand side of matching. Scraped from vendor websites, holds capabilities + certifications + embedding for semantic matching. UUID PK to fit the matching pipeline.
+- **`companies`** (Job 2): minimal legal-entity record. Created when we ingest an award and resolve the winner's name. Historical "who-wins-what" signal.
+- **`company_profiles`** (Phase 3): the matchable supply side. In the MVP, **derived from award winners** by the profile builder (not yet scraped); holds capability text + embedding for semantic matching. UUID PK to fit the matching pipeline. Future work enriches these from dossier text / web scraping.
 
 ---
 
 ## 6. Remaining work (short)
 
-- **Job 4 — APScheduler loop** — Wire `app/ingestion/scheduler.py` so the CLI runs automatically (daily tender poll, weekly awards back-fill, dossier download).
-- **Understanding layer** — `FieldExtractor` using Claude tool-use to turn raw `tenders.raw_json` + `documents.text_content` into a clean `TenderProfile`. Post-extraction validator for sanity checks.
-- **Phase 3 — Matching** — Hard-disqualifier rules, lazy-load embedding ensemble, semantic cosine scorer, budget/location/qualification rule sub-scorers, LR weights learner, `MatchingPipeline` orchestrator. Writes to `matches`.
-- **Phase 3 — Seed `company_profiles`** — We need a starter pool of vendor capability profiles. Initially populated by hand from a curated list, later via scraping.
-- **Phase 4 — Generation** — `EvidenceExtractor` finds dossier passages, `EmailDrafter` calls Claude with an evidence-only constraint (no hallucinated claims), `EmailValidator` checks output.
-- **Phase 5 — Feedback + auth** — `POST /api/v1/feedback` endpoint, LR weight retraining job, basic multi-tenant auth.
-- **Phase 6 — Agent** — `AgentController` exposes ingestion / matching / generation as Claude tools and drives multi-step workflows (see [docs/Notes.md](docs/Notes.md) for the recommended Planner-executor + Reflection-loop design).
-- **Frontend integration** — Right now only `HomeView` makes a real backend call (`/health`). The other views (Tenders, Matches, Emails) are placeholders. We'll wire them up to the v1 API once the routers stop being stubs.
+Already done: ingestion (Jobs 1–3), the matching pipeline, the two-sided email backend, the full REST API, the Claude agent + reflection loop, frontend integration, and the ML dataset export. What's left:
+
+- **Job 4 — APScheduler loop** — Wire `app/ingestion/scheduler.py` so the CLI runs automatically (daily tender poll, weekly awards back-fill).
+- **Understanding layer** — `FieldExtractor` using Claude tool-use to turn raw `tenders.raw_json` + `documents.extracted_text` into a clean `TenderProfile`, plus a post-extraction validator. The matcher reads columns/dossier text directly today.
+- **Phase 3 — scoring quality** — CPV-prefix matching for the qualification score, and richer `company_profiles` capability text (from dossiers / scraping) so semantic scores stop being thin. See [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md).
+- **Phase 4 — Claude-written emails** — fill in `app/generation/` (`EvidenceExtractor` / `EmailDrafter` with an evidence-only constraint / `EmailValidator`) and swap the inline deterministic drafter for a Claude call.
+- **Phase 5 — Feedback → retraining + auth** — the LR weight retraining job that consumes `feedback`, plus basic multi-tenant auth.
 - **Minor follow-ups** — multi-page TED pagination (`iterationNextToken`) untested at scale; favicon 404; extend `LEGAL_SUFFIXES` to non-Latin scripts (Bulgarian `ООД`, Polish `Sp. z o.o.`, etc.); add `_` to entity-resolution punctuation set.
 
 ---
 
 ## 7. Summary — what you should now understand
 
-1. **GTMAgent is a B2B lead-gen pipeline** for the EU construction-tech sector — pull tenders from TED → understand them with Claude → match against vendors → draft outreach emails → learn from feedback.
-2. **The stack is Python 3.11 + FastAPI + Postgres (with pgvector) + Vue 3 + Vite + Tailwind**, all glued together with Docker for the database and Alembic for schema migrations.
-3. **Three of the four ingestion jobs are live and verified.** We have 5 real tenders, 5 awards, 5 resolved companies, and 1 downloaded PDF dossier in the dev DB. Jobs 1, 2, and 3 of Phase 2 are done.
-4. **The understanding, matching, generation, feedback, and agent layers are stubs** — empty files with the right names. That's where you come in.
-5. **The database has 10 tables in 2 sub-graphs**: ingestion (`tenders`, `awards`, `companies`, `documents` — populated) and matching/emails (`company_profiles`, `matches`, `emails`, `feedback`, `embeddings` — empty, plus the `alembic_version` meta table).
-6. **The TED API contract is empirically discovered, not documented** — read [CLAUDE.md §14 and §15](CLAUDE.md) before touching field names. Don't trust the official docs over the existing code.
-7. **CI runs 3 jobs on every push**: backend pytest (57 tests), frontend lint+build, and an Alembic migration check against a fresh pgvector container.
+1. **GTMAgent is a B2B lead-gen pipeline** for the EU construction-tech sector — pull tenders from TED → enrich with dossier text → match against a supplier pool → draft two-sided outreach emails → learn from feedback, with a Claude agent orchestrating on demand.
+2. **The stack is Python 3.11 + FastAPI + Postgres (with pgvector) + Vue 3 + Vite + Tailwind**, plus a separate `requirements-ml.txt` (sentence-transformers + scikit-learn). Docker runs the database; Alembic manages the schema.
+3. **Ingestion is live and verified** (Jobs 1–3). The full 24-month awards back-fill produced ~21k awards / ~15k companies, exported to `exports/` for the ML model.
+4. **Matching, the two-sided email backend, the REST API, and the Claude agent are all built and working.** Still stubs: the APScheduler loop, the Claude understanding/`FieldExtractor` layer, LR-weight retraining, and auth.
+5. **The database has 11 tables in 2 sub-graphs**: ingestion (`tenders`, `awards`, `companies`, `documents`) and matching/emails/agent (`company_profiles`, `matches`, `emails`, `feedback`, `embeddings`, `agent_runs`) — bridged by `company_profiles.source_company_id`. Migration head is `0008`.
+6. **The TED API contract is empirically discovered, not documented** — check the supported-fields list in a 400 response before touching `TED_FIELDS` / `AWARD_FIELDS`. Don't trust the official docs over the existing code.
+7. **CI runs 3 jobs on every push**: backend pytest (~130 tests, against a `gtm_test` Postgres), frontend lint+build, and an Alembic migration check against a fresh pgvector container.
 
 ---
 
@@ -308,20 +326,22 @@ cd backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-alembic upgrade head            # applies migrations 0001, 0002, 0003
-pytest tests -v                 # should show 57 passed
+# optional — only for REAL semantic matching / building company_profile embeddings:
+#   pip install -r requirements-ml.txt   (heavy: pulls torch)
+alembic upgrade head            # applies migrations 0001 → 0008
+pytest tests -v                 # ~130 tests (needs the gtm_test DB — see Step 6)
 ```
 
 ### Step 6 — Create the test database (one-time)
 
-The dossier-downloader tests use a separate `gtm_test` database. Create it once:
+The DB-touching tests use a separate `gtm_test` database. Create it once:
 
 ```bash
 docker exec gtmagent-db-1 psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
 docker exec gtmagent-db-1 psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
 ```
 
-Re-run `pytest tests -v` — all 57 tests should now pass on Postgres.
+Re-run `pytest tests -v` — all ~130 tests should now pass on Postgres.
 
 ### Step 7 — Start the backend dev server
 
@@ -362,7 +382,7 @@ Visit http://localhost:5173. You should see:
 - The **AppShell** with a top nav: Home / Tenders / Matches / Emails.
 - The **Home view** showing the placeholder banner plus "**Backend status: ok**" — that's the frontend calling `/health` via the Vite proxy.
 
-The other three views are intentional stubs right now (Tenders / Matches / Emails) — they render placeholder content because the matching/email pipelines aren't built yet.
+The other three views (Tenders / Matches / Emails) are wired to the v1 API via Pinia stores, with bundled sample data as a fallback when the backend has no rows yet. The Matches view can trigger the matching pipeline, generate supplier/buyer emails, and submit feedback.
 
 ### Step 10 — Smoke-test the TED ingestion (optional but satisfying)
 
@@ -384,8 +404,8 @@ docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer
 - **First `docker compose up -d db`** pulls the `pgvector/pgvector:pg16` image (~400 MB). Takes 30–60 seconds depending on connection.
 - **First `pip install -r requirements-dev.txt`** downloads and builds wheels for ~40 packages. Takes 2–5 minutes. PyMuPDF and pgvector may compile from source briefly.
 - **First `npm ci`** downloads ~300 MB into `node_modules/`. Takes 1–2 minutes. You may see deprecation warnings — they're benign (see [CLAUDE.md §11 — esbuild advisory](CLAUDE.md)).
-- **First `alembic upgrade head`** runs 3 migrations in sequence and prints `INFO  [alembic.runtime.migration] Running upgrade ...` lines. Takes <2 seconds.
-- **First `pytest tests -v`** — 57 tests, takes ~5–10 seconds. If any test fails on first run, the most likely cause is that you forgot Step 6 (create `gtm_test` database) — fix that and re-run.
+- **First `alembic upgrade head`** runs 8 migrations in sequence and prints `INFO  [alembic.runtime.migration] Running upgrade ...` lines. Takes <2 seconds.
+- **First `pytest tests -v`** — ~130 tests, takes ~10–20 seconds. If any test fails on first run, the most likely cause is that you forgot Step 6 (create `gtm_test` database) — fix that and re-run.
 - **Browser loads the Home view in ~300ms** with a clean "Backend status: ok" line. If that line says "Backend status: error" or never shows, your `uvicorn` isn't running or the Vite proxy can't reach it — check that uvicorn shows traffic in its log when you reload the page.
 
 ### Common Mac-specific gotchas

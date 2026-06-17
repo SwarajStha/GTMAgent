@@ -1,5 +1,13 @@
 # Future Decisions Required
 
+> **Status (2026-06-17):** The **Agentic Flow Decision** below has been
+> implemented along the recommended lines — Planner-executor on the native
+> Anthropic SDK, ~6 tools, with a reflection loop, in 3 files
+> (`app/agent/controller.py`, `tools.py`, `reflector.py`) and the `agent_runs`
+> table. The matching pipeline it plans over is also live. The **PDF Scraping
+> Decision** remains as recommended: deferred — the matcher runs on TED notice
+> text + award history for V1. This document is kept as the design rationale.
+
 ## Agentic Flow Decision
 
 Quick context check first: there's already a Phase 6 scaffold at [backend/app/agent/controller.py](../backend/app/agent/controller.py) ("Claude tool-use orchestrator that exposes ingestion/matching/generation as tools"), and CLAUDE.md §9 frames it as "AgentController exposes ingestion/matching/generation as Claude tools and drives multi-step workflows". So the agentic layer is already part of the plan — what hasn't been settled is *how agentic*, and where it adds real value vs. just being a thin wrapper over deterministic code.
@@ -30,6 +38,8 @@ Implementation choices:
 - Prompt caching on the tool definitions + system prompt — keeps cost low even with many calls per run.
 
 That hits both academic boxes — visible multi-step autonomy AND a self-improvement angle — without dragging in framework complexity. The whole agent layer is probably 2-3 files: `controller.py` (the loop), `tools.py` (schemas + dispatch), `reflector.py` (the daily narrative job).
+
+**What actually shipped** (vs. the plan above): the 3 files exist as predicted. The tool set landed as **6 tools** — `ingest_tenders`, `ingest_awards`, `download_dossiers`, `find_matches`, `draft_email`, `query_db` (no separate `get_evidence` tool yet; evidence is folded into drafting). Two safety guards were added during integration: write-capable tools default to **`dry_run=True`** (so a chat goal can't trigger a live TED poll / DB write), and `query_db` is gated to a single read-only `SELECT` with a whole-word write-verb blocklist. Runs persist to `agent_runs`; `Reflector.run_daily_summary()` reads recent runs + feedback.
 
 
 ## PDF Scraping Decision

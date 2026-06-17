@@ -1,8 +1,8 @@
 # GTM Agent
 
-B2B lead-generation pipeline for the EU construction-tech sector. Pulls public procurement notices from TED (Tenders Electronic Daily), extracts structured tender profiles via Claude, matches them against curated company profiles using a hybrid score (semantic embeddings + rule sub-scores), and drafts evidence-grounded outreach emails. University group project — TUM CITHN2014.
+B2B lead-generation pipeline for the EU construction-tech sector. Pulls public procurement notices from TED (Tenders Electronic Daily), enriches them with downloaded dossier text, matches them against a supplier pool using a hybrid score (semantic embeddings + rule sub-scores), drafts evidence-grounded outreach emails for **both sides** of the deal (supplier outreach + buyer recommendation digest), and captures thumbs-up/down feedback. A Claude tool-use agent orchestrates the whole flow on demand. University group project — TUM CITHN2014.
 
-For the decision log see [docs/architecture.md](docs/architecture.md).
+For the decision log see [docs/architecture.md](docs/architecture.md); for the schema see [docs/Database_Explanation.md](docs/Database_Explanation.md); for teammate onboarding see [Guide.md](Guide.md).
 
 ---
 
@@ -10,17 +10,23 @@ For the decision log see [docs/architecture.md](docs/architecture.md).
 
 | Phase | What | Status |
 |---|---|---|
-| 1 | Repo scaffold, schema, CI | Done |
-| 2 — Job 1 | TED Contract Notice poller + upsert | **Done — 5 real rows in DB, end-to-end live-verified** |
-| 2 — Job 2 | Awards back-fill | Pending |
-| 2 — Job 3 | Dossier downloader (PDFs from notice URLs) | Pending |
-| 2 — Job 4 | APScheduler in-process loop | Pending |
-| 3 | Matching (disqualifier, embedder, semantic, rules, LR weights) | Stubs only |
-| 4 | Generation (evidence, drafter, validator) | Stubs only |
-| 5 | Feedback loop + auth | Not started |
-| 6 | Agent (Claude tool-use orchestrator) | Stubs only |
+| 1 | Repo scaffold, schema, CI | **Done** |
+| 2 — Job 1 | TED Contract Notice poller + upsert | **Done — live-verified** |
+| 2 — Job 2 | Awards back-fill + entity resolution | **Done — full back-fill: ~21k awards / ~15k companies** |
+| 2 — Job 3 | Dossier downloader (PDFs from notice URLs) + ingestion CLI | **Done — live-verified** |
+| 2 — Job 4 | APScheduler in-process loop | Stub (`scheduler.py`) — not wired |
+| 2 — Understanding | Claude `FieldExtractor` + validator | Stubs only |
+| 3 | Matching (profile builder, disqualifier, embedder, semantic, rules) | **Done — multi-supplier pipeline, live-smoked** |
+| 4 | Generation (two-sided email backend: supplier + buyer drafts) | **Done — deterministic evidence-grounded drafts** |
+| 5 | Feedback capture endpoint | **Done** — LR weight retraining + auth still pending |
+| 6 | Agent (Claude tool-use orchestrator + reflection loop) | **Done — planner-executor loop over 6 tools** |
+| — | REST API (tenders/awards/companies/matches/emails/feedback/agent) | **Done — all routers implemented** |
+| — | Frontend (Tenders / Matches / Emails views wired to the API) | **Done — with sample-data fallback** |
+| — | ML training dataset export (`exports/`) | **Done — for the lead-scoring model** |
 
-Latest commit: `829f480 feat(ingestion): TED v3 Contract Notice poller (Job 1)`
+What is **not** wired yet: the APScheduler loop (Job 4), the Claude `FieldExtractor` understanding layer, LR-weight retraining from feedback, and auth/multi-tenancy. The email drafts and the supplier capability profiles are deterministic/thin in the MVP — see [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md) for the known scoring limitations.
+
+Latest commit: `f27f95a chore(data): add awards dataset export for ML` (branch `feat/pipeline-integration-ML-backend-frontend`).
 
 ---
 
@@ -69,13 +75,24 @@ If `py -3.11` errors on Windows, install Python 3.11 from python.org and re-open
 
 ## Stack summary
 
-- **Backend**: Python 3.11 / FastAPI 0.115 / Pydantic v2 / SQLAlchemy 2.x / Alembic / psycopg 3 / httpx / pgvector
+- **Backend**: Python 3.11 / FastAPI 0.115 / Pydantic v2 / SQLAlchemy 2.x / Alembic / psycopg 3 / httpx / pgvector / PyMuPDF (dossier text)
 - **Database**: Postgres 16 + pgvector (`pgvector/pgvector:pg16`)
 - **Frontend**: Vue 3 / TypeScript / Vite 5 / Pinia / vue-router 4 / Tailwind 3
-- **Embeddings (future)**: sentence-transformers ensemble — `all-MiniLM-L6-v2` (384-d), `all-mpnet-base-v2` (768-d), `multilingual-e5-large` (1024-d), CPU-only
-- **LLM**: Claude Sonnet 4.6 (`claude-sonnet-4-6`) via the Anthropic SDK
-- **Scheduler**: APScheduler in-process (no broker)
+- **ML / embeddings** (separate `requirements-ml.txt`, see below): `sentence-transformers` (the matcher uses `all-MiniLM-L6-v2`, 384-d, CPU-only) + `scikit-learn` / `joblib` (lead-scoring + future LR weight learning). Kept out of the core requirements because `torch` is heavy and the unit tests inject fake embedders.
+- **LLM**: Claude Sonnet 4.6 (`claude-sonnet-4-6`) via the Anthropic SDK — drives the agent orchestrator and reflection loop
+- **Scheduler**: APScheduler in-process (stub — not yet wired)
 - **CI**: GitHub Actions — pytest, frontend lint+build, Alembic migration smoke
+
+### Why ML deps are split out
+
+`requirements.txt` is the lean runtime (no `torch`). `requirements-ml.txt` adds `sentence-transformers`, `scikit-learn`, and `joblib`. Install it only when you want **real** semantic matching or to build the `company_profiles` embeddings:
+
+```sh
+pip install -r backend/requirements-ml.txt
+# locally add the SSL workaround flags (see Prerequisites)
+```
+
+The matching pipeline lazy-imports `sentence_transformers`, so the API and the test suite stay torch-free and fast; the ML stack is only pulled when `POST /api/v1/matches/run/{tender_id}` (or `build_company_profiles`) actually executes.
 
 ---
 
@@ -85,29 +102,37 @@ If `py -3.11` errors on Windows, install Python 3.11 from python.org and re-open
 GTMAgent/
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/           FastAPI routers (stubs)
+│   │   ├── api/v1/           FastAPI routers — tenders, awards, companies,
+│   │   │                       matches, emails, feedback, agent (all implemented)
 │   │   ├── core/             config.py (pydantic-settings), logging.py
-│   │   ├── db/               models.py, session.py, migrations/
-│   │   ├── ingestion/        ted_client.py, base_client.py, schemas.py + Job 2/3/4 stubs
+│   │   ├── db/               models.py (11 tables), session.py, migrations/ (0001–0008)
+│   │   ├── ingestion/        ted_client, awards_client, dossier_downloader,
+│   │   │                       entity_resolution, base_client, schemas, __main__ (CLI),
+│   │   │                       scheduler (stub)
 │   │   ├── understanding/    extractor, schemas, validator (stubs)
-│   │   ├── matching/         disqualifier, embedder, semantic, rules, lr_weights, pipeline (stubs)
-│   │   ├── generation/       evidence, drafter, validator (stubs)
-│   │   └── agent/            controller (stub)
-│   ├── scripts/              ted_smoke.py — see backend/scripts/README.md
-│   ├── tests/                pytest suite (33 tests; 5 ingestion, 1 health, 27 stub imports)
+│   │   ├── matching/         profile_builder (Layer 1), pipeline (Layer 2),
+│   │   │                       disqualifier, embedder, semantic, rules, lr_weights
+│   │   ├── generation/       evidence, drafter, validator (stubs — endpoints draft inline)
+│   │   └── agent/            controller (planner-executor loop), tools, reflector
+│   ├── easy_demo/            standalone GTM lead-scoring ML pipeline (own README)
+│   ├── scripts/              ted_smoke, awards_smoke, agent_smoke — see scripts/README.md
+│   ├── tests/                pytest suite (~130 tests across 22 files)
 │   ├── alembic.ini           script_location = app/db/migrations
-│   ├── requirements.txt      runtime deps
+│   ├── requirements.txt      lean runtime deps (no torch)
+│   ├── requirements-ml.txt   sentence-transformers + scikit-learn + joblib
 │   ├── requirements-dev.txt  -r requirements.txt + pytest + ruff
 │   ├── .env.example          template
 │   └── Dockerfile
 ├── frontend/
-│   └── src/                  Vue components, views, stores, router
+│   └── src/                  Vue views (Home/Tenders/Matches/Emails), Pinia stores, router
+├── exports/                  ML training dataset (awards_training.csv, companies.csv) + README
 ├── scripts/
 │   ├── init-pgvector.sql     CREATE EXTENSION IF NOT EXISTS vector (runs on first DB init)
 │   └── test_ted_api.py       teammate's parallel TED v1 private-search exploration
-├── docs/                     Architecture + planning notes
+├── docs/                     architecture, Database_Explanation, Notes, smoke records, plans
 ├── docker-compose.yml        db + backend + frontend
 ├── .github/workflows/ci.yml  3 CI jobs
+├── Guide.md                  teammate onboarding guide
 └── README.md                 (this file)
 ```
 
@@ -143,8 +168,8 @@ pip install -r requirements-dev.txt
 # If you hit SSL errors on PyPI, add:
 #   --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org
 cp .env.example .env       # then edit ANTHROPIC_API_KEY
-alembic upgrade head
-pytest tests -v            # should show 33 passed
+alembic upgrade head       # applies migrations 0001 → 0008
+pytest tests -v            # ~130 tests (needs the gtm_test DB — see backend/scripts/README.md)
 uvicorn app.main:app --reload
 ```
 
@@ -161,6 +186,10 @@ pytest tests -v
 uvicorn app.main:app --reload
 ```
 
+> The full test suite touches a real Postgres `gtm_test` database. One-time setup
+> (create the DB + `vector` extension) is documented in
+> [backend/scripts/README.md](backend/scripts/README.md#one-time-test-database-setup).
+
 **Frontend**:
 
 ```sh
@@ -169,15 +198,62 @@ npm ci          # use ci, not install — respects the committed lockfile
 npm run dev
 ```
 
-### 3. TED ingestion smoke test
+### 3. Run the ingestion pipeline (CLI)
 
-The TED poller has a dedicated diagnostic script. See [backend/scripts/README.md](backend/scripts/README.md) for full usage. Quick version:
+All three ingestion jobs are exposed through one CLI (`backend/app/ingestion/__main__.py`). From inside `backend/` with the venv active:
 
 ```powershell
-# from repo root, with venv active
-python backend\scripts\ted_smoke.py             # dry-run, prints raw API + parsed summary
-python backend\scripts\ted_smoke.py --live      # writes 5 rows to the tenders table
+python -m app.ingestion --mode both                      # contracts + awards + dossiers
+python -m app.ingestion --mode contracts --days 7 --dry-run
+python -m app.ingestion --mode awards --backfill-months 12 --limit 50
+python -m app.ingestion --mode both --no-dossiers
 ```
+
+Exit code is `0` when every job finished clean, `1` if any reported `errors > 0` or `failed > 0`. For the interactive, two-phase diagnostic scripts (raw API peek + dry-run/live), see [backend/scripts/README.md](backend/scripts/README.md):
+
+```powershell
+python backend\scripts\ted_smoke.py             # dry-run, prints raw API + parsed summary
+python backend\scripts\ted_smoke.py --live      # writes tender rows
+python backend\scripts\awards_smoke.py --live   # writes awards + resolves companies
+python backend\scripts\agent_smoke.py           # exercises the Claude agent loop (dry-run default)
+```
+
+### 4. Run matching + generation
+
+Once tenders, awards, and companies exist, build the supplier pool and rank it for a tender. This needs the ML deps (`requirements-ml.txt`):
+
+```powershell
+# 1. Layer 1 — derive company_profiles (capability text + MiniLM embedding) from award winners
+#    (call build_company_profiles(session); see docs/matching_pipeline_smoke_record.md)
+# 2. Layer 2 — rank the pool for a tender and persist `matches`:
+curl -X POST http://localhost:8000/api/v1/matches/run/1
+# 3. Draft outreach for one match (supplier-facing):
+curl -X POST http://localhost:8000/api/v1/emails/<match_id>/generate
+# 4. Draft a buyer-facing digest of a tender's top suppliers:
+curl -X POST http://localhost:8000/api/v1/emails/buyer/1/generate
+```
+
+`docs/matching_pipeline_smoke_record.md` has a copy-paste reproduction script and the current scoring caveats.
+
+---
+
+## API surface (v1)
+
+All routers are mounted under `/api/v1` and documented interactively at http://localhost:8000/docs.
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `/health` | GET | Liveness probe (used by Docker/CI/frontend) |
+| `/api/v1/tenders` · `/{id}` | GET | List/search tenders; detail includes raw TED payload |
+| `/api/v1/awards` · `/{id}` | GET | List/search award notices joined to resolved winner |
+| `/api/v1/companies` · `/{id}` | GET | Canonical award-winner companies + award-history rollups |
+| `/api/v1/matches` · `/{id}` | GET | Ranked tender × company-profile matches with score breakdown |
+| `/api/v1/matches/run/{tender_id}` | POST | Run the matching pipeline for a tender, persist `matches` |
+| `/api/v1/emails/{match_id}/generate` | POST | Supplier-facing outreach draft (evidence-grounded) |
+| `/api/v1/emails/buyer/{tender_id}/generate` | POST | Buyer-facing digest of top supplier matches |
+| `/api/v1/emails/{email_id}` | GET | Fetch a stored draft |
+| `/api/v1/feedback` | POST | Thumbs-up/down on a match (+ optional email) |
+| `/api/v1/agent/run` | POST | Run the Claude tool-use agent on a free-text goal (`dry_run` defaults to true) |
 
 ---
 
@@ -185,12 +261,13 @@ python backend\scripts\ted_smoke.py --live      # writes 5 rows to the tenders t
 
 Two env vars, two ports, one database:
 
-| Var | Port | Used by |
+| Var | Port / DB | Used by |
 |---|---|---|
-| `DATABASE_URL` | 6543 (pooled alias) | FastAPI app at runtime |
-| `DATABASE_URL_DIRECT` | 5432 (direct) | Alembic migrations only |
+| `DATABASE_URL` | 6543 (pooled alias), `gtm` | FastAPI app at runtime |
+| `DATABASE_URL_DIRECT` | 5432 (direct), `gtm` | Alembic migrations only |
+| `DATABASE_URL_TEST` | 5432 (direct), `gtm_test` | pytest fixtures (create/drop/rollback freely) |
 
-Inside the Docker compose network both collapse to `db:5432`; the 6543 port is a host-side alias only. The split exists because some DDL operations are unreliable through connection poolers.
+Inside the Docker compose network both runtime URLs collapse to `db:5432`; the 6543 port is a host-side alias only. The split exists because some DDL operations are unreliable through connection poolers. The test suite uses a **separate** `gtm_test` database so it never touches dev data — one-time setup in [backend/scripts/README.md](backend/scripts/README.md#one-time-test-database-setup).
 
 ---
 
@@ -211,9 +288,9 @@ Once the DB is up, you can browse it via:
 
 GitHub Actions runs three jobs on every push and PR to `main`:
 
-1. **backend-test** — Python 3.11, install dev deps, `pytest tests`
+1. **backend-test** — Python 3.11, install dev deps, spin up a Postgres service + create `gtm_test`, `pytest tests` (~130 tests; the matching/agent tests inject fakes so the run stays torch-free)
 2. **frontend-lint** — Node 20, `npm ci`, `npm run lint`, `npm run build`
-3. **migration-check** — Spins up a real `pgvector/pgvector:pg16` service, runs `alembic upgrade head`
+3. **migration-check** — Spins up a real `pgvector/pgvector:pg16` service, runs `alembic upgrade head` (0001 → 0008)
 
 ---
 

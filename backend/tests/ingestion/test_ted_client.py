@@ -68,8 +68,44 @@ def test_from_ted_response_fallback_keys() -> None:
 
 
 def test_search_all_pages_pagination() -> None:
-    page1 = {"notices": [{"publication-number": "1"}], "nextPage": "token-abc"}
-    page2 = {"notices": [{"publication-number": "2"}]}  # no nextPage -> stop
+    # ITERATION mode: TED ignores `page`; the only way to advance is to echo
+    # the previous response's iterationNextToken back in the request body.
+    page1 = {"notices": [{"publication-number": "1"}], "iterationNextToken": "tok-abc"}
+    page2 = {"notices": [{"publication-number": "2"}]}  # no token -> stop
+
+    client = TedClient.__new__(TedClient)
+    client._user_agent = "test"
+    client._timeout_s = 30
+    client._page_delay_ms = 0
+    mock_session = MagicMock()
+
+    sent_tokens: list[str | None] = []
+
+    def fake_post(path: str, json: dict) -> MagicMock:
+        sent_tokens.append(json.get("iterationNextToken"))
+        resp = MagicMock()
+        resp.status_code = 200
+        # Switch on the token the client sent, NOT on `page`.
+        resp.json.return_value = page2 if json.get("iterationNextToken") else page1
+        return resp
+
+    mock_session.post.side_effect = fake_post
+    client._session = mock_session
+
+    pages = list(client.search_all_pages(query="q", fields=["publication-number"]))
+    assert pages == [page1, page2]
+    assert mock_session.post.call_count == 2
+    # First request carries no token; second echoes page1's token back.
+    assert sent_tokens == [None, "tok-abc"]
+
+
+def test_search_all_pages_stops_on_repeated_token() -> None:
+    # Regression guard: a non-advancing token (TED bug / our bug) must NOT
+    # loop forever. The client stops the second time it sees the same token.
+    looping_page = {
+        "notices": [{"publication-number": "x"}],
+        "iterationNextToken": "stuck",
+    }
 
     client = TedClient.__new__(TedClient)
     client._user_agent = "test"
@@ -80,14 +116,15 @@ def test_search_all_pages_pagination() -> None:
     def fake_post(path: str, json: dict) -> MagicMock:
         resp = MagicMock()
         resp.status_code = 200
-        resp.json.return_value = page1 if json["page"] == 1 else page2
+        resp.json.return_value = looping_page  # always the same token
         return resp
 
     mock_session.post.side_effect = fake_post
     client._session = mock_session
 
     pages = list(client.search_all_pages(query="q", fields=["publication-number"]))
-    assert pages == [page1, page2]
+    # Yields page once, sees "stuck", advances once, sees "stuck" again -> stop.
+    assert len(pages) == 2
     assert mock_session.post.call_count == 2
 
 

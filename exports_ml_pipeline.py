@@ -711,12 +711,10 @@ def hard_filter(
     def passes_value(prof: dict) -> bool:
         if tender_eur is None:
             return True
-        mn = prof.get("min_value_eur")
-        mx = prof.get("max_value_eur")
         med = prof.get("median_value_eur")
         if med and med > 0:
             ratio = tender_eur / med
-            return 0.01 <= ratio <= 100   # within 2 orders of magnitude
+            return 0.01 <= ratio <= 100
         return True
 
     # Tier 1: CPV-4 + country + value

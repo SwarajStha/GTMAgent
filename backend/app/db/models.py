@@ -233,10 +233,25 @@ class Match(Base, TimestampMixin):
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("company_profiles.id"), nullable=False, index=True
     )
+    # Legacy 4-feature sub-scores. Kept for API/frontend/email back-compat; in the
+    # v5 LR path they are rollups of the 10 features below (semantic; value;
+    # country-match; best-CPV-prefix). The fixed-weight fallback populates them too.
     semantic_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     budget_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     location_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     qualification_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # v5 feature columns (migration 0009). Nullable: rows from the legacy
+    # fixed-weight path leave them NULL. `semantic_score` above doubles as v5's
+    # semantic feature, so it is not repeated here.
+    cpv_4digit_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cpv_2digit_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nuts_exact_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nuts_country_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_in_range_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    country_match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    company_size_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    competition_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, index=True)
     weights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)

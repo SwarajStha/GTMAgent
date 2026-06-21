@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.db.models import CompanyProfile, Match, Tender
+from app.db.models import CompanyProfile, Email, Match, Tender
+from app.matching.features import FEATURE_NAMES
+from app.matching.lr_weights import LogisticRegressionScorer
 from app.matching.pipeline import MatchingPipeline
 
 
@@ -143,3 +145,70 @@ def test_pipeline_top_n_limits_results(db_session) -> None:
     assert len(results) == 2
     # but all three are persisted
     assert db_session.query(Match).filter_by(tender_id=tender.id).count() == 3
+
+
+def _cpv4_scorer() -> LogisticRegressionScorer:
+    """A trained-LR stand-in that weights only cpv_4digit_score (identity scaler)."""
+    coef = [0.0] * len(FEATURE_NAMES)
+    coef[FEATURE_NAMES.index("cpv_4digit_score")] = 5.0
+    return LogisticRegressionScorer(
+        feature_names=FEATURE_NAMES,
+        coefficients=coef,
+        intercept=0.0,
+        scaler_mean=[0.0] * len(FEATURE_NAMES),
+        scaler_scale=[1.0] * len(FEATURE_NAMES),
+    )
+
+
+def test_pipeline_lr_mode_populates_feature_columns(db_session) -> None:
+    embedder = _KeywordEmbedder()
+    tender = _tender(cpv_codes=["45000000"])
+    db_session.add(tender)
+    db_session.flush()
+    db_session.add_all([
+        _profile("Bau GmbH", "parquet floor", embedder,
+                 cpv_codes=["45000000"], regions=["DE"], country="DE"),
+        _profile("Soft SARL", "cloud software", embedder,
+                 cpv_codes=["72000000"], regions=["FR"], country="FR"),
+    ])
+    db_session.flush()
+
+    results = MatchingPipeline(embedder=embedder, lr_scorer=_cpv4_scorer()).run(
+        tender.id, session=db_session
+    )
+    # cpv_4digit dominates → the construction company ranks first.
+    assert results[0]["company_name"] == "Bau GmbH"
+    assert results[0]["final_score"] > results[1]["final_score"]
+
+    matches = db_session.query(Match).filter_by(tender_id=tender.id).all()
+    constr = next(m for m in matches if m.cpv_4digit_score == 1.0)
+    assert constr.competition_score == 0.5          # v5 feature columns populated
+    assert constr.value_score is not None
+    assert constr.location_score == 1.0             # rollup: country_match (DE in [DE])
+    assert constr.weights and "features" in constr.weights and "contributions" in constr.weights
+    assert any(m.cpv_4digit_score == 0.0 for m in matches)  # the IT company
+
+
+def test_pipeline_rematch_deletes_dependent_emails(db_session) -> None:
+    # Regression for G26: re-matching a tender whose match was turned into an
+    # email must not hit emails_match_id_fkey on the idempotent DELETE.
+    embedder = _KeywordEmbedder()
+    tender = _tender()
+    db_session.add(tender)
+    db_session.flush()
+    db_session.add(_profile("Floor Pros", "parquet floor", embedder, cpv_codes=["45000000"]))
+    db_session.flush()
+
+    pipe = MatchingPipeline(embedder=embedder)
+    pipe.run(tender.id, session=db_session)
+    match = db_session.query(Match).filter_by(tender_id=tender.id).first()
+    db_session.add(Email(
+        match_id=match.id, tender_id=tender.id, recipient_type="buyer",
+        subject="s", body="b", status="draft",
+    ))
+    db_session.flush()
+
+    pipe.run(tender.id, session=db_session)  # must not raise
+
+    assert db_session.query(Match).filter_by(tender_id=tender.id).count() == 1
+    assert db_session.query(Email).filter_by(tender_id=tender.id).count() == 0

@@ -59,6 +59,16 @@ class MatchOut(BaseModel):
     budget_score: float
     location_score: float
     qualification_score: float
+    # v5 LR feature columns (NULL on legacy fixed-weight matches).
+    cpv_4digit_score: float | None = None
+    cpv_2digit_score: float | None = None
+    nuts_exact_score: float | None = None
+    nuts_country_score: float | None = None
+    value_score: float | None = None
+    value_in_range_score: float | None = None
+    country_match_score: float | None = None
+    company_size_score: float | None = None
+    competition_score: float | None = None
     final_score: float
     weights: dict[str, Any] | None
     explanation: str | None
@@ -115,6 +125,15 @@ def _match_out(match: Match, tender: Tender, company: CompanyProfile) -> MatchOu
         budget_score=match.budget_score,
         location_score=match.location_score,
         qualification_score=match.qualification_score,
+        cpv_4digit_score=match.cpv_4digit_score,
+        cpv_2digit_score=match.cpv_2digit_score,
+        nuts_exact_score=match.nuts_exact_score,
+        nuts_country_score=match.nuts_country_score,
+        value_score=match.value_score,
+        value_in_range_score=match.value_in_range_score,
+        country_match_score=match.country_match_score,
+        company_size_score=match.company_size_score,
+        competition_score=match.competition_score,
         final_score=match.final_score,
         weights=match.weights,
         explanation=match.explanation,

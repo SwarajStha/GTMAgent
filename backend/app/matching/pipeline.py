@@ -1,16 +1,23 @@
 """Matching pipeline orchestrator (Layer 2).
 
 `run(tender_id)` ranks the supplier pool (`company_profiles`, built by Layer 1)
-for one tender and persists the result to the `matches` table:
+for one tender and persists the result to the `matches` table.
 
-  1. derive the tender's text + terms (MVP: from its own columns + dossier text)
-  2. embed the tender once; load candidate company_profiles
-  3. per candidate: hard-disqualify, else score semantic + budget + location +
-     qualification, combine with weights -> final_score
-  4. replace this tender's `matches` rows (idempotent recompute) and return the
-     ranked list
+Two scoring modes, chosen automatically:
 
-Embedder/weights are injectable so unit tests run without MiniLM/torch.
+* **v5 LR mode** (default when `exports/model_params.json` exists) — computes the
+  10 v5 features per candidate (`features.compute_features`), narrows the pool
+  with a v5-style hard filter (CPV-4 + country + value, progressive relaxation),
+  and ranks by the trained Logistic Regression's win-probability
+  (`lr_weights.LogisticRegressionScorer`). The 9 feature columns are persisted;
+  the legacy 4 sub-scores are kept as rollups for API/frontend/email back-compat.
+* **Legacy fixed-weight mode** (fallback when no params file) — the original
+  semantic + budget + location + qualification weighted combine (0.40/0.20/0.20/
+  0.20). Scores the whole pool. Preserves pre-Step-4 behavior so the app works
+  before v5 is (re-)run.
+
+Embedder / weights / scorer are injectable so unit tests run without
+MiniLM/torch and without the params file.
 """
 from __future__ import annotations
 
@@ -19,14 +26,16 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.db.models import CompanyProfile, Document, Match, Tender
+from app.db.models import CompanyProfile, Document, Email, Match, Tender
+from app.matching import features as feat
 from app.matching.disqualifier import Disqualifier
 from app.matching.embedder import EnsembleEmbedder
+from app.matching.lr_weights import LogisticRegressionScorer
 from app.matching.rules import RuleScorer
-from app.matching.semantic import SemanticScorer
+from app.matching.semantic import SemanticScorer, cosine_similarity
 
-# Default combiner weights for the four sub-scores (Phase 5 LR learning will
-# replace these from feedback). Keys match the `matches` score columns.
+# Default combiner weights for the legacy fallback path. Keys match the four
+# legacy `matches` score columns.
 DEFAULT_WEIGHTS: dict[str, float] = {
     "semantic": 0.40,
     "budget": 0.20,
@@ -35,6 +44,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 }
 
 _DOSSIER_TEXT_CHARS = 2000
+_MAX_CANDIDATES = 200
 
 
 class MatchingPipeline:
@@ -44,14 +54,18 @@ class MatchingPipeline:
         self,
         embedder: EnsembleEmbedder | None = None,
         weights: dict[str, float] | None = None,
+        lr_scorer: LogisticRegressionScorer | None = None,
+        use_lr: bool = True,
     ) -> None:
         self.embedder = embedder or EnsembleEmbedder()
         self.semantic = SemanticScorer()
         self.rules = RuleScorer()
         self.disqualifier = Disqualifier()
         self.weights = weights or dict(DEFAULT_WEIGHTS)
+        # Load the trained LR once; None → legacy fixed-weight mode.
+        self.lr_scorer = lr_scorer or (LogisticRegressionScorer.from_json() if use_lr else None)
 
-    # ── helpers ────────────────────────────────────────────────────────────
+    # ── tender helpers ───────────────────────────────────────────────────────
 
     def _tender_text(self, session: Session, tender: Tender) -> str:
         parts: list[str] = []
@@ -70,11 +84,17 @@ class MatchingPipeline:
         return ". ".join(parts) if parts else (tender.ted_notice_id or "")
 
     @staticmethod
+    def _tender_cpvs(tender: Tender) -> list[str]:
+        return [str(c) for c in (tender.cpv_codes or [])]
+
+    @staticmethod
     def _tender_terms(tender: Tender) -> list[str]:
         terms: list[str] = [str(c) for c in (tender.cpv_codes or [])]
         if tender.title:
             terms.append(tender.title)
         return terms
+
+    # ── legacy fixed-weight combine ──────────────────────────────────────────
 
     def _combine(self, semantic: float, rule: dict[str, float]) -> float:
         w = self.weights
@@ -91,7 +111,7 @@ class MatchingPipeline:
         return round(combined, 4)
 
     @staticmethod
-    def _explain(semantic: float, rule: dict[str, float]) -> str:
+    def _explain_legacy(semantic: float, rule: dict[str, float]) -> str:
         ordered = sorted(
             {
                 "semantic": semantic,
@@ -104,6 +124,55 @@ class MatchingPipeline:
         )
         return "Match factors: " + ", ".join(f"{name} {value:.2f}" for name, value in ordered)
 
+    @staticmethod
+    def _explain_lr(contributions: dict[str, float]) -> str:
+        top = sorted(contributions.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        return "Top factors: " + ", ".join(f"{name} {value:+.2f}" for name, value in top)
+
+    # ── v5 hard filter (Python-side, progressive relaxation) ─────────────────
+
+    @staticmethod
+    def _hard_filter(
+        candidates: list[CompanyProfile],
+        tender_cpvs: list[str],
+        tender_country: str | None,
+        tender_budget: float | None,
+        max_candidates: int = _MAX_CANDIDATES,
+    ) -> list[CompanyProfile]:
+        t4 = {feat._norm_cpv(c)[:4] for c in tender_cpvs if feat._norm_cpv(c)}
+        t2 = {feat._norm_cpv(c)[:2] for c in tender_cpvs if feat._norm_cpv(c)}
+        tc = (tender_country or "").strip().upper()
+
+        def caps(c: CompanyProfile) -> dict[str, Any]:
+            return c.capabilities or {}
+
+        def cpv_prefixes(c: CompanyProfile, n: int) -> set[str]:
+            codes = caps(c).get("cpv_codes") or []
+            return {p[:n] for p in (feat._norm_cpv(x) for x in codes) if p}
+
+        def in_country(c: CompanyProfile) -> bool:
+            return bool(tc) and tc in [str(r).upper() for r in (caps(c).get("regions") or [])]
+
+        def passes_value(c: CompanyProfile) -> bool:
+            if tender_budget is None:
+                return True
+            med = (caps(c).get("deal_size_eur") or {}).get("median")
+            if med and med > 0:
+                return 0.01 <= (tender_budget / med) <= 100
+            return True
+
+        tiers = (
+            lambda c: bool(t4 & cpv_prefixes(c, 4)) and in_country(c) and passes_value(c),
+            lambda c: bool(t2 & cpv_prefixes(c, 2)) and in_country(c),
+            lambda c: bool(t2 & cpv_prefixes(c, 2)),
+            in_country,
+        )
+        for predicate in tiers:
+            pool = [c for c in candidates if predicate(c)]
+            if len(pool) >= 5:
+                return pool[:max_candidates]
+        return candidates[:max_candidates]
+
     # ── orchestration ──────────────────────────────────────────────────────
 
     def run(
@@ -112,12 +181,7 @@ class MatchingPipeline:
         session: Session | None = None,
         top_n: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Score the pool for `tender_id`, persist `matches`, return ranked list.
-
-        `session` is injectable for tests; when omitted a `SessionLocal()` is
-        opened and closed here (so the agent's `find_matches` tool can call it
-        with just a tender id).
-        """
+        """Score the pool for `tender_id`, persist `matches`, return ranked list."""
         own_session = session is None
         if own_session:
             from app.db.session import SessionLocal
@@ -129,13 +193,24 @@ class MatchingPipeline:
                 raise ValueError(f"Tender {tender_id} not found")
 
             tender_vec = self.embedder.embed(self._tender_text(session, tender))
+            tender_cpvs = self._tender_cpvs(tender)
             tender_terms = self._tender_terms(tender)
 
-            candidates = session.scalars(
-                sa.select(CompanyProfile).where(CompanyProfile.embedding.is_not(None))
-            ).all()
+            candidates = list(
+                session.scalars(
+                    sa.select(CompanyProfile).where(CompanyProfile.embedding.is_not(None))
+                ).all()
+            )
+            if self.lr_scorer is not None:
+                candidates = self._hard_filter(
+                    candidates, tender_cpvs, tender.buyer_country, tender.budget_eur
+                )
 
-            # Idempotent recompute: clear this tender's previous matches first.
+            # Idempotent recompute. Re-matching invalidates any emails grounded in
+            # the previous (now-stale) matches, so drop those first to avoid the
+            # emails_match_id_fkey violation (gap G26), then clear the matches.
+            stale_match_ids = sa.select(Match.id).where(Match.tender_id == tender_id)
+            session.execute(sa.delete(Email).where(Email.match_id.in_(stale_match_ids)))
             session.execute(sa.delete(Match).where(Match.tender_id == tender_id))
 
             results: list[dict[str, Any]] = []
@@ -158,45 +233,17 @@ class MatchingPipeline:
                         location_score=0.0,
                         qualification_score=0.0,
                         final_score=0.0,
-                        weights=self.weights,
+                        weights=self._mode_metadata(),
                         is_disqualified=True,
                         explanation="Disqualified: " + "; ".join(reasons),
                     )
+                elif self.lr_scorer is not None:
+                    match = self._score_lr(tender, tender_vec, tender_cpvs, company, caps)
                 else:
-                    semantic = self.semantic.score(tender_vec, list(company.embedding))
-                    rule = self.rules.score(
-                        tender_budget_eur=tender.budget_eur,
-                        tender_country=tender.buyer_country,
-                        tender_terms=tender_terms,
-                        company_country=company.country,
-                        capabilities=caps,
-                    )
-                    final = self._combine(semantic, rule)
-                    match = Match(
-                        tender_id=tender_id,
-                        company_id=company.id,
-                        semantic_score=semantic,
-                        budget_score=rule["budget_score"],
-                        location_score=rule["location_score"],
-                        qualification_score=rule["qualification_score"],
-                        final_score=final,
-                        weights=self.weights,
-                        is_disqualified=False,
-                        explanation=self._explain(semantic, rule),
-                    )
+                    match = self._score_legacy(tender, tender_vec, tender_terms, company, caps)
 
                 session.add(match)
-                results.append({
-                    "tender_id": tender_id,
-                    "company_id": str(company.id),
-                    "company_name": company.name,
-                    "semantic_score": match.semantic_score,
-                    "budget_score": match.budget_score,
-                    "location_score": match.location_score,
-                    "qualification_score": match.qualification_score,
-                    "final_score": match.final_score,
-                    "is_disqualified": match.is_disqualified,
-                })
+                results.append(self._result_row(tender_id, company, match))
 
             session.commit()
             results.sort(key=lambda r: r["final_score"], reverse=True)
@@ -204,3 +251,97 @@ class MatchingPipeline:
         finally:
             if own_session:
                 session.close()
+
+    # ── per-candidate scoring ────────────────────────────────────────────────
+
+    def _score_lr(
+        self,
+        tender: Tender,
+        tender_vec: list[float],
+        tender_cpvs: list[str],
+        company: CompanyProfile,
+        caps: dict[str, Any],
+    ) -> Match:
+        # v5 semantic = clipped raw cosine (the LR was trained on this, not the
+        # floor/span-mapped SemanticScorer value).
+        semantic = max(0.0, min(1.0, cosine_similarity(tender_vec, list(company.embedding))))
+        f = feat.compute_features(
+            semantic_score=semantic,
+            tender_cpvs=tender_cpvs,
+            tender_nuts=None,  # contract-notice tenders carry no NUTS code yet
+            tender_budget_eur=tender.budget_eur,
+            tender_country=tender.buyer_country,
+            capabilities=caps,
+        )
+        final = round(float(self.lr_scorer.score(f)), 4)
+        contributions = self.lr_scorer.contributions(f)
+        return Match(
+            tender_id=tender.id,
+            company_id=company.id,
+            # legacy rollups (kept for back-compat consumers)
+            semantic_score=round(f["semantic_score"], 4),
+            budget_score=round(f["value_score"], 4),
+            location_score=round(f["country_match_score"], 4),
+            qualification_score=round(max(f["cpv_4digit_score"], 0.5 * f["cpv_2digit_score"]), 4),
+            # v5 feature columns
+            cpv_4digit_score=f["cpv_4digit_score"],
+            cpv_2digit_score=f["cpv_2digit_score"],
+            nuts_exact_score=f["nuts_exact_score"],
+            nuts_country_score=f["nuts_country_score"],
+            value_score=f["value_score"],
+            value_in_range_score=f["value_in_range_score"],
+            country_match_score=f["country_match_score"],
+            company_size_score=f["company_size_score"],
+            competition_score=f["competition_score"],
+            final_score=final,
+            weights={**self.lr_scorer.as_metadata(), "features": f, "contributions": contributions},
+            is_disqualified=False,
+            explanation=self._explain_lr(contributions),
+        )
+
+    def _score_legacy(
+        self,
+        tender: Tender,
+        tender_vec: list[float],
+        tender_terms: list[str],
+        company: CompanyProfile,
+        caps: dict[str, Any],
+    ) -> Match:
+        semantic = self.semantic.score(tender_vec, list(company.embedding))
+        rule = self.rules.score(
+            tender_budget_eur=tender.budget_eur,
+            tender_country=tender.buyer_country,
+            tender_terms=tender_terms,
+            company_country=company.country,
+            capabilities=caps,
+        )
+        final = self._combine(semantic, rule)
+        return Match(
+            tender_id=tender.id,
+            company_id=company.id,
+            semantic_score=semantic,
+            budget_score=rule["budget_score"],
+            location_score=rule["location_score"],
+            qualification_score=rule["qualification_score"],
+            final_score=final,
+            weights=self.weights,
+            is_disqualified=False,
+            explanation=self._explain_legacy(semantic, rule),
+        )
+
+    def _mode_metadata(self) -> dict[str, Any]:
+        return self.lr_scorer.as_metadata() if self.lr_scorer is not None else self.weights
+
+    @staticmethod
+    def _result_row(tender_id: int, company: CompanyProfile, match: Match) -> dict[str, Any]:
+        return {
+            "tender_id": tender_id,
+            "company_id": str(company.id),
+            "company_name": company.name,
+            "semantic_score": match.semantic_score,
+            "budget_score": match.budget_score,
+            "location_score": match.location_score,
+            "qualification_score": match.qualification_score,
+            "final_score": match.final_score,
+            "is_disqualified": match.is_disqualified,
+        }

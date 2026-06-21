@@ -62,17 +62,17 @@ def test_derive_cpv_codes_dedupes() -> None:
     assert derive_cpv_codes(awards) == ["45000000", "72000000"]
 
 
-def test_derive_deal_size_min_max() -> None:
+def test_derive_deal_size_min_max_median() -> None:
     awards = [
         _award(1, "A-1", contract_value_eur=50_000.0),
         _award(1, "A-2", contract_value_eur=250_000.0),
         _award(1, "A-3", contract_value_eur=None),
     ]
-    assert derive_deal_size(awards) == {"min": 50_000.0, "max": 250_000.0}
+    assert derive_deal_size(awards) == {"min": 50_000.0, "max": 250_000.0, "median": 150_000.0}
 
 
 def test_derive_deal_size_empty() -> None:
-    assert derive_deal_size([]) == {"min": None, "max": None}
+    assert derive_deal_size([]) == {"min": None, "max": None, "median": None}
 
 
 def test_derive_regions_includes_company_and_buyer_countries() -> None:
@@ -102,7 +102,7 @@ def test_build_company_profiles_creates_and_is_idempotent(db_session) -> None:
 
     fake = _FakeEmbedder()
     summary = build_company_profiles(db_session, embedder=fake)
-    assert summary == {"processed": 1, "created": 1, "updated": 0}
+    assert summary == {"processed": 1, "created": 1, "updated": 0, "embedded": 1}
 
     profile = (
         db_session.query(CompanyProfile).filter_by(source_company_id=company.id).one()
@@ -110,11 +110,21 @@ def test_build_company_profiles_creates_and_is_idempotent(db_session) -> None:
     assert profile.name == "Build GmbH"
     assert profile.country == "DE"
     assert profile.capabilities["cpv_codes"] == ["45000000", "72000000"]
-    assert profile.capabilities["deal_size_eur"] == {"min": 50_000.0, "max": 250_000.0}
+    assert profile.capabilities["deal_size_eur"] == {
+        "min": 50_000.0, "max": 250_000.0, "median": 150_000.0,
+    }
+    assert profile.capabilities["award_count"] == 2
     assert list(profile.embedding) == [0.1] * 384
 
-    # Re-run: updates the existing profile, does not duplicate.
+    # Re-run with unchanged capability text: updates structured fields but
+    # SKIPS re-embedding (embedded=0, embedder not called again), no duplicate.
     summary2 = build_company_profiles(db_session, embedder=fake)
-    assert summary2 == {"processed": 1, "created": 0, "updated": 1}
+    assert summary2 == {"processed": 1, "created": 0, "updated": 1, "embedded": 0}
+    assert len(fake.calls) == 1  # embedded only on the first run
     count = db_session.query(CompanyProfile).filter_by(source_company_id=company.id).count()
     assert count == 1
+
+    # force_reembed=True re-encodes even when text is unchanged.
+    summary3 = build_company_profiles(db_session, embedder=fake, force_reembed=True)
+    assert summary3 == {"processed": 1, "created": 0, "updated": 1, "embedded": 1}
+    assert len(fake.calls) == 2

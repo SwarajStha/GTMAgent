@@ -17,6 +17,7 @@ than duplicates.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from statistics import median
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -34,12 +35,29 @@ def derive_cpv_codes(awards: Sequence[Award]) -> list[str]:
     return list(seen)
 
 
+def derive_nuts_codes(awards: Sequence[Award]) -> list[str]:
+    """Distinct NUTS region codes across a company's awards (place of
+    performance / buyer region). Feeds the v5 nuts_exact / nuts_country
+    features. Order-preserved, upper-cased."""
+    seen: dict[str, None] = {}
+    for award in awards:
+        nuts = getattr(award, "nuts_code", None)
+        if nuts:
+            seen.setdefault(str(nuts).strip().upper(), None)
+    return list(seen)
+
+
 def derive_deal_size(awards: Sequence[Award]) -> dict[str, float | None]:
-    """Min/max observed contract value (EUR) — the company's demonstrated range."""
+    """Min/max/median observed contract value (EUR) — the company's demonstrated
+    range. Median feeds the v5 value_score (log-proximity to median)."""
     values = [a.contract_value_eur for a in awards if a.contract_value_eur is not None]
     if not values:
-        return {"min": None, "max": None}
-    return {"min": float(min(values)), "max": float(max(values))}
+        return {"min": None, "max": None, "median": None}
+    return {
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "median": float(median(values)),
+    }
 
 
 def derive_regions(company: Company, awards: Sequence[Award]) -> list[str]:
@@ -71,14 +89,21 @@ def build_company_profiles(
     session: Session,
     embedder: EnsembleEmbedder | None = None,
     limit: int | None = None,
+    force_reembed: bool = False,
 ) -> dict[str, int]:
     """Derive/refresh a `company_profiles` row for each award-winner company.
 
-    Returns a summary: ``{processed, created, updated}``. `embedder` is
+    Returns a summary: ``{processed, created, updated, embedded}``. `embedder` is
     injectable so tests can pass a fake (avoiding the MiniLM download).
+
+    Embedding is the slow part (~ms per profile × 15k), so it is **skipped when
+    the capability text is unchanged** from the stored profile — re-running to
+    refresh only the structured capability fields (CPV/NUTS/value/size) no longer
+    re-encodes the whole pool. Pass ``force_reembed=True`` after switching the
+    embedding model to rebuild every vector.
     """
     embedder = embedder or EnsembleEmbedder()
-    summary = {"processed": 0, "created": 0, "updated": 0}
+    summary = {"processed": 0, "created": 0, "updated": 0, "embedded": 0}
 
     company_stmt = sa.select(Company).order_by(Company.id)
     if limit is not None:
@@ -93,10 +118,11 @@ def build_company_profiles(
         capabilities = {
             "text": capability_text,
             "cpv_codes": derive_cpv_codes(awards),
+            "nuts_codes": derive_nuts_codes(awards),
             "deal_size_eur": derive_deal_size(awards),
             "regions": derive_regions(company, awards),
+            "award_count": len(awards),
         }
-        embedding = embedder.embed(capability_text)
 
         profile = session.scalars(
             sa.select(CompanyProfile).where(CompanyProfile.source_company_id == company.id)
@@ -105,13 +131,20 @@ def build_company_profiles(
             profile = CompanyProfile(source_company_id=company.id)
             session.add(profile)
             summary["created"] += 1
+            needs_embed = True
         else:
             summary["updated"] += 1
+            prev_text = (profile.capabilities or {}).get("text")
+            needs_embed = (
+                force_reembed or profile.embedding is None or prev_text != capability_text
+            )
 
         profile.name = company.canonical_name
         profile.country = company.country
         profile.capabilities = capabilities
-        profile.embedding = embedding
+        if needs_embed:
+            profile.embedding = embedder.embed(capability_text)
+            summary["embedded"] += 1
         summary["processed"] += 1
 
     session.commit()

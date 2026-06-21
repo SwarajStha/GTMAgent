@@ -59,6 +59,12 @@ COMPANIES_PATH = EXPORTS_DIR / "companies.csv"
 OUTPUT_PATH    = EXPORTS_DIR / "top3_results.json"
 REPORT_PATH    = EXPORTS_DIR / "model_report.json"
 MODEL_PATH     = EXPORTS_DIR / "company_matcher.joblib"
+# Plain-JSON model params for the in-app matcher (app/matching/lr_weights.py):
+# coefficients alone are not enough to reproduce predict_proba — the LR was fit
+# on StandardScaler-normalised features, so the app also needs the intercept and
+# the scaler mean/scale. This file is the contract between v5 (trains) and the
+# app (serves), so the app doesn't have to load the sklearn-version-coupled joblib.
+MODEL_PARAMS_PATH = EXPORTS_DIR / "model_params.json"
 
 MINILM_MODEL   = "paraphrase-multilingual-MiniLM-L12-v2"
 RANDOM_STATE   = 42
@@ -962,6 +968,21 @@ def main() -> None:
     EXPORTS_DIR.mkdir(exist_ok=True)
     joblib.dump({"model": lr_model, "scaler": lr_scaler}, MODEL_PATH)
     print(f"\n[Model] Saved → {MODEL_PATH}", flush=True)
+
+    # 9b. Save plain-JSON params the in-app matcher loads (coef + intercept +
+    # scaler), so it can reproduce predict_proba without the joblib. Keep the
+    # feature order identical to FEATURE_NAMES — the app indexes by it.
+    model_params = {
+        "feature_names":  FEATURE_NAMES,
+        "coefficients":   lr_model.coef_[0].tolist(),
+        "intercept":      float(lr_model.intercept_[0]),
+        "scaler_mean":    lr_scaler.mean_.tolist(),
+        "scaler_scale":   lr_scaler.scale_.tolist(),
+        "trained_at":     datetime.utcnow().isoformat() + "Z",
+    }
+    with MODEL_PARAMS_PATH.open("w", encoding="utf-8") as f:
+        json.dump(model_params, f, ensure_ascii=False, indent=2)
+    print(f"[Model] Params → {MODEL_PARAMS_PATH}", flush=True)
 
     # 10. Evaluate on held-out test tenders
     eval_output = evaluate(

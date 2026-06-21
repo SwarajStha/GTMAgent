@@ -27,6 +27,17 @@ interface ApiMatch {
   budget_score: number
   location_score: number
   qualification_score: number
+  // v5 LR feature columns (null on legacy fixed-weight matches). Surfaced here
+  // for the planned feature-breakdown UI; the view does not render them yet.
+  cpv_4digit_score?: number | null
+  cpv_2digit_score?: number | null
+  nuts_exact_score?: number | null
+  nuts_country_score?: number | null
+  value_score?: number | null
+  value_in_range_score?: number | null
+  country_match_score?: number | null
+  company_size_score?: number | null
+  competition_score?: number | null
   final_score: number
   weights: Record<string, unknown> | null
   explanation: string | null

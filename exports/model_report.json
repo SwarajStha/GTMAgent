@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-06-18T21:03:27.892612Z",
+  "model": "Logistic Regression",
+  "feature_names": [
+    "semantic_score",
+    "cpv_4digit_score",
+    "cpv_2digit_score",
+    "nuts_exact_score",
+    "nuts_country_score",
+    "value_score",
+    "value_in_range_score",
+    "country_match_score",
+    "company_size_score",
+    "competition_score"
+  ],
+  "lr_coefficients": {
+    "semantic_score": 1.1972002893524836,
+    "cpv_4digit_score": 1.2210258842364392,
+    "cpv_2digit_score": -0.4149718771372354,
+    "nuts_exact_score": 1.159439360421079,
+    "nuts_country_score": -0.13999605844746402,
+    "value_score": -0.11725886656639188,
+    "value_in_range_score": -0.10324671634130941,
+    "country_match_score": -0.3711487085082885,
+    "company_size_score": -0.3509756586202925,
+    "competition_score": 0.0
+  },
+  "train_awards": 10507,
+  "test_awards": 500,
+  "neg_ratio": 5,
+  "hard_negatives": true,
+  "total_tenders": 500,
+  "winner_unresolvable": 0,
+  "winner_filtered_out": 131,
+  "null_breakdown": {
+    "winner_filtered_out": 131
+  },
+  "winner_in_pool_rate": 1.0,
+  "hit_at_1": 0.454,
+  "hit_at_1_count": "227/500",
+  "hit_at_3": 0.548,
+  "hit_at_3_count": "274/500",
+  "hit_at_5": 0.592,
+  "hit_at_5_count": "296/500"
+}

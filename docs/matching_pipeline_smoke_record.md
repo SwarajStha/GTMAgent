@@ -210,3 +210,48 @@ real major EU infra firms) led by a literal road company on a road tender.
   spread is still narrow (**G6** thin-profile-text, still open). These are data
   limitations, not pipeline defects. Absolute probabilities are lower than the
   Step 2/3 weighted scores by design (calibrated LR vs. a 0–1 blend).
+
+---
+
+## 2026-06-21 (later) — G6 (richer semantic text) + G7 (EUR budgets)
+
+- **What changed:** `build_capability_text` now uses each company's award
+  `notice_title` + `description` (v5-aligned, 4000-char cap); `money.to_eur`
+  EUR-normalises award values + tender budgets and drops `-1/0` sentinels. Full
+  profile re-embed run (`{updated: 15129, embedded: 15129}`). No migration, no v5
+  re-run (both changes align the app to the existing v5 model).
+
+### Output (captured 2026-06-21)
+
+```
+tender 1 | DEU | Germany – Clinic construction work – Krankenhaus Wittmund
+  budget raw=None currency=None -> EUR None
+  semantic across top-100: min=0.67 max=0.82 spread=0.15
+    P=0.789  sem=0.79 bud=0.50 val_rng=0.5  MK Nordbau GmbH
+    P=0.788  sem=0.78 bud=0.50 val_rng=0.5  Estrich - Stoll GmbH      (screed/flooring)
+    P=0.782  sem=0.78 bud=0.50 val_rng=0.5  BTS Müller & Olschok GmbH
+    P=0.777  sem=0.77 bud=0.50 val_rng=0.5  Herrndobler GmbH
+    P=0.775  sem=0.77 bud=0.50 val_rng=0.5  C.A.H. GmbH
+
+tender 2 | CZE | Czechia – Carriageway resurfacing works – D11
+  budget raw=1353000000.0 currency=CZK -> EUR 54120000.0
+  semantic across top-100: min=0.00 max=0.78 spread=0.78
+    P=0.549  sem=0.78 bud=0.58 val_rng=1.0  SWIETELSKY stavební s.r.o.
+    P=0.537  sem=0.67 bud=0.79 val_rng=1.0  SaM silnice a mosty a.s.   (roads & bridges)
+    P=0.526  sem=0.66 bud=0.85 val_rng=1.0  TSS GRADE, a.s.
+    P=0.479  sem=0.68 bud=0.75 val_rng=1.0  TOMI - REMONT a.s.
+    P=0.478  sem=0.66 bud=0.74 val_rng=1.0  SWIETELSKY Rail CZ s.r.o.
+```
+
+**Interpretation — both wins confirmed:**
+- **G6:** semantic cosines for relevant matches jumped from ~0.24–0.43 (Step 4) to
+  **0.67–0.82** (clinic) and now span **0.00–0.78** (road) — the embeddings carry
+  real procurement-description signal. Relevant specialists surface (Estrich/screed
+  for a clinic; "silnice a mosty" = roads & bridges for a road tender). P(win) for
+  relevant matches rose from ~0.27 to **~0.79** — the LR's strong semantic
+  coefficient now acts on meaningful inputs (and the app's semantic distribution
+  matches v5's training, reducing skew).
+- **G7:** tender 2's `1.353 B CZK` now reads **€54.12 M** (a sane resurfacing
+  value); budget / value_in_range features discriminate (0.58–0.85 / 1.0) instead
+  of saturating at ~1.0. Tender 1 genuinely has no budget → 0.5 fill (correct).
+- **Marked resolved:** G6, G7 (tracker R21/R22).

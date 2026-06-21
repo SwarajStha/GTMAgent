@@ -43,6 +43,7 @@ def _award(company_id: int, ted_notice_id: str, **kw: object) -> Award:
         "cpv_code": "45000000",
         "buyer_country": "DE",
         "contract_value_eur": 100_000.0,
+        "contract_currency": "EUR",  # values are EUR-converted via to_eur (G7)
         "award_date": date(2026, 1, 1),
         "raw_json": {"publication-number": ted_notice_id},
     }
@@ -75,16 +76,37 @@ def test_derive_deal_size_empty() -> None:
     assert derive_deal_size([]) == {"min": None, "max": None, "median": None}
 
 
+def test_derive_deal_size_converts_currency_and_drops_sentinels() -> None:
+    # 100 PLN → 23 EUR; -1 and 0 are "not disclosed" sentinels → dropped;
+    # an unknown currency → dropped. Only the converted PLN value survives.
+    awards = [
+        _award(1, "A-1", contract_value_eur=100.0, contract_currency="PLN"),
+        _award(1, "A-2", contract_value_eur=-1.0, contract_currency="EUR"),
+        _award(1, "A-3", contract_value_eur=0.0, contract_currency="EUR"),
+        _award(1, "A-4", contract_value_eur=500.0, contract_currency="XYZ"),
+    ]
+    assert derive_deal_size(awards) == {"min": 23.0, "max": 23.0, "median": 23.0}
+
+
+def test_build_capability_text_uses_award_title_and_description() -> None:
+    awards = [
+        _award(1, "A-1", notice_title="Carriageway resurfacing", description="D11 motorway"),
+    ]
+    text = build_capability_text(_company(canonical_name="Roads SE"), awards)
+    assert "Carriageway resurfacing" in text
+    assert "D11 motorway" in text
+
+
+def test_build_capability_text_falls_back_to_name_without_award_text() -> None:
+    # Awards predating the enrichment columns have no title/description.
+    text = build_capability_text(_company(canonical_name="Bembé Parkett"), [_award(1, "A-1")])
+    assert text == "Bembé Parkett"
+
+
 def test_derive_regions_includes_company_and_buyer_countries() -> None:
     company = _company(country="DE")
     awards = [_award(1, "A-1", buyer_country="DE"), _award(1, "A-2", buyer_country="FR")]
     assert derive_regions(company, awards) == ["DE", "FR"]
-
-
-def test_build_capability_text_mentions_name_and_cpv() -> None:
-    text = build_capability_text(_company(canonical_name="Bembé Parkett"), [_award(1, "A-1")])
-    assert "Bembé Parkett" in text
-    assert "45000000" in text
 
 
 # ── DB builder ─────────────────────────────────────────────────────────────

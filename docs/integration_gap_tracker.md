@@ -29,6 +29,11 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   feedback durable across re-matches; `FeedbackRetrainer` + `POST
   /feedback/retrain` write `model_params_feedback.json`, served in preference to
   the v5 base. 208/208 backend tests. Activate with `alembic upgrade head`.
+- **2026-06-21 — G6 + G7 done & live-smoked.** Capability text now uses award
+  title+description (semantic 0.24→0.67–0.82 on relevant matches; P(win)
+  0.27→0.79); budgets EUR-normalised via `money.to_eur` (1.353 B CZK → €54 M).
+  216/216 tests; no migration / no v5 re-run (both align the app to the existing
+  model). Activated via a full profile re-embed. **Next: G10** (Claude emails).
 
 ---
 
@@ -69,6 +74,9 @@ Everything else is downstream of that.
 | R17 | No hard filter / retrieval ceiling (G3) | Step 4 | v5-style hard filter in `pipeline.run` (15,129→≤200) |
 | R18 | Trained-model artifact strategy (G18) | Step 4 | app loads `model_params.json` (coef+intercept+scaler); joblib not needed |
 | R19 | Re-match FK crash (G26) | Step 4 | delete dependent emails before recompute; live-verified |
+| R20 | Feedback captured but unused / LR retraining (G8) | Step 5 | `FeedbackRetrainer` + `POST /feedback/retrain` + durable `feedback.features` (mig `0010`) |
+| R21 | Thin semantic text (G6) | 2026-06-21 | capability text = award title+description; semantic 0.24→0.67–0.82 (live) |
+| R22 | Budget unnormalised/sentinels (G7) | 2026-06-21 | `money.to_eur` EUR conversion + sentinel drop; CZK 1.353 B → €54 M (live) |
 
 ---
 
@@ -127,20 +135,25 @@ Swap + re-encode `company_profiles.embedding`. **Files:** `app/matching/
 embedder.py` + a re-embed run of `build_company_profiles`. **Refs:** PR #10
 review #3.
 
-#### G6 🟡 Enrich `company_profiles.capabilities.text`
-Currently name + CPV + regions → thin semantic cosines (~0.24–0.31). Enrich from
-`awards.notice_title`/`description` (now populated) and `documents.extracted_text`.
-**Refs:** smoke #3, PR #10 review #4, `gtm_lead_scoring`.
+#### G6 ✅ Enrich `company_profiles.capabilities.text` — DONE (2026-06-21)
+`build_capability_text` now concatenates each award's `notice_title` +
+`description` (capped 4000 chars, deterministic order), mirroring the v5 trainer's
+company text. Live smoke: semantic cosines for relevant matches jumped from
+~0.24–0.43 to **0.67–0.82** (clinic tender) and spread to **0.00–0.78** (road
+tender), and P(win) for relevant matches rose from ~0.27 to ~0.79 (the LR's
+strong semantic coefficient now operates on meaningful inputs — also reduces
+train/serve skew vs v5). `documents.extracted_text` enrichment remains a possible
+further lift. **Refs:** smoke #3, PR #10 review #4.
 
-#### G7 🟡 Budget signal: missing *and* unnormalised
-Two distinct problems. (a) TED CNs often omit `budget_eur` → `budget_score = 0.5`
-everywhere; derive from estimated-value fields / dossiers where present. (b) When
-present, the value is **not FX-normalised and uses sentinels** — the 2026-06-21
-smoke saw tender 2 carry `budget_eur = €1.353 B` (an un-converted/sentinel value,
-the known *"contract_value_eur is not EUR-converted"* caveat), which falsely
-pushed `budget_score` to ~1.0. Fix: convert to EUR via an FX table (v5's
-`RATES_TO_EUR` is reusable) and treat `-1`/`0`/implausible magnitudes as missing.
-**Refs:** smoke #4 + 2026-06-21 re-run, PR #10 review #5, exports/README data caveats.
+#### G7 ✅ Budget signal: FX-normalised + sentinels handled — DONE (2026-06-21)
+New `app/matching/money.to_eur` (FX table mirroring v5's `RATES_TO_EUR`) drops
+`-1`/`0` sentinels + unknown currencies. `derive_deal_size` converts award values
+to EUR; the pipeline converts the tender budget (`budget_eur` + `currency`, default
+EUR). Live smoke: tender 2's `1.353 B CZK` now reads **€54.12 M** (sane) and the
+value features discriminate (budget 0.58–0.85, value_in_range 1.0) instead of
+saturating at ~1.0. This also aligns the app with v5 (which already trains on
+EUR-converted values). Residual: tenders that genuinely omit a budget still get
+the 0.5 fill (data-limited). **Refs:** smoke #4 + 2026-06-21, PR #10 review #5.
 
 ### Priority 3 — Feedback loop / self-improvement (Phase 5)
 

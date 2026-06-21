@@ -31,6 +31,7 @@ from app.matching import features as feat
 from app.matching.disqualifier import Disqualifier
 from app.matching.embedder import EnsembleEmbedder
 from app.matching.lr_weights import LogisticRegressionScorer
+from app.matching.money import to_eur
 from app.matching.rules import RuleScorer
 from app.matching.semantic import SemanticScorer, cosine_similarity
 
@@ -196,6 +197,11 @@ class MatchingPipeline:
             tender_vec = self.embedder.embed(self._tender_text(session, tender))
             tender_cpvs = self._tender_cpvs(tender)
             tender_terms = self._tender_terms(tender)
+            # Convert the tender budget to EUR (G7). `budget_eur` is misnamed —
+            # it's denominated in `tender.currency`; default missing currency to
+            # EUR. Company deal sizes are already EUR (derive_deal_size), so this
+            # makes the value features + capacity gate compare like-for-like.
+            tender_eur = to_eur(tender.budget_eur, tender.currency or "EUR")
 
             candidates = list(
                 session.scalars(
@@ -204,7 +210,7 @@ class MatchingPipeline:
             )
             if self.lr_scorer is not None:
                 candidates = self._hard_filter(
-                    candidates, tender_cpvs, tender.buyer_country, tender.budget_eur
+                    candidates, tender_cpvs, tender.buyer_country, tender_eur
                 )
 
             # Idempotent recompute. Re-matching invalidates any emails grounded in
@@ -219,7 +225,7 @@ class MatchingPipeline:
                 caps = company.capabilities or {}
                 deal = caps.get("deal_size_eur") or {}
                 disqualified, reasons = self.disqualifier.check(
-                    tender_budget_eur=tender.budget_eur,
+                    tender_budget_eur=tender_eur,
                     required_certifications=[],  # MVP: tenders lack structured cert reqs
                     company_certifications=[],
                     deal_max=deal.get("max"),
@@ -239,9 +245,13 @@ class MatchingPipeline:
                         explanation="Disqualified: " + "; ".join(reasons),
                     )
                 elif self.lr_scorer is not None:
-                    match = self._score_lr(tender, tender_vec, tender_cpvs, company, caps)
+                    match = self._score_lr(
+                        tender, tender_eur, tender_vec, tender_cpvs, company, caps
+                    )
                 else:
-                    match = self._score_legacy(tender, tender_vec, tender_terms, company, caps)
+                    match = self._score_legacy(
+                        tender, tender_eur, tender_vec, tender_terms, company, caps
+                    )
 
                 session.add(match)
                 results.append(self._result_row(tender_id, company, match))
@@ -258,6 +268,7 @@ class MatchingPipeline:
     def _score_lr(
         self,
         tender: Tender,
+        tender_eur: float | None,
         tender_vec: list[float],
         tender_cpvs: list[str],
         company: CompanyProfile,
@@ -270,7 +281,7 @@ class MatchingPipeline:
             semantic_score=semantic,
             tender_cpvs=tender_cpvs,
             tender_nuts=None,  # contract-notice tenders carry no NUTS code yet
-            tender_budget_eur=tender.budget_eur,
+            tender_budget_eur=tender_eur,
             tender_country=tender.buyer_country,
             capabilities=caps,
         )
@@ -303,6 +314,7 @@ class MatchingPipeline:
     def _score_legacy(
         self,
         tender: Tender,
+        tender_eur: float | None,
         tender_vec: list[float],
         tender_terms: list[str],
         company: CompanyProfile,
@@ -310,7 +322,7 @@ class MatchingPipeline:
     ) -> Match:
         semantic = self.semantic.score(tender_vec, list(company.embedding))
         rule = self.rules.score(
-            tender_budget_eur=tender.budget_eur,
+            tender_budget_eur=tender_eur,
             tender_country=tender.buyer_country,
             tender_terms=tender_terms,
             company_country=company.country,

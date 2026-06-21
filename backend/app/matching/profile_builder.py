@@ -24,6 +24,11 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Award, Company, CompanyProfile
 from app.matching.embedder import EnsembleEmbedder
+from app.matching.money import to_eur
+
+# Cap on the concatenated capability text fed to the embedder (mirrors the v5
+# trainer's 4000-char cap so in-app embeddings match the trained distribution).
+_CAPABILITY_TEXT_CHARS = 4000
 
 
 def derive_cpv_codes(awards: Sequence[Award]) -> list[str]:
@@ -48,9 +53,17 @@ def derive_nuts_codes(awards: Sequence[Award]) -> list[str]:
 
 
 def derive_deal_size(awards: Sequence[Award]) -> dict[str, float | None]:
-    """Min/max/median observed contract value (EUR) — the company's demonstrated
-    range. Median feeds the v5 value_score (log-proximity to median)."""
-    values = [a.contract_value_eur for a in awards if a.contract_value_eur is not None]
+    """Min/max/median contract value in **EUR** — the company's demonstrated range.
+
+    Award values are stored in their own `contract_currency` (TED does not
+    convert) and use -1/0 sentinels, so each is run through `to_eur` first (G7):
+    values with an unknown/blank currency or a non-positive sentinel are dropped.
+    Median feeds the v5 value_score (log-proximity to median)."""
+    values = [
+        v
+        for v in (to_eur(a.contract_value_eur, a.contract_currency) for a in awards)
+        if v is not None
+    ]
     if not values:
         return {"min": None, "max": None, "median": None}
     return {
@@ -73,16 +86,27 @@ def derive_regions(company: Company, awards: Sequence[Award]) -> list[str]:
 
 
 def build_capability_text(company: Company, awards: Sequence[Award]) -> str:
-    """A short natural-language capability blurb to embed for semantic matching."""
-    cpvs = derive_cpv_codes(awards)
-    regions = derive_regions(company, awards)
-    parts = [company.canonical_name]
-    if cpvs:
-        parts.append("Public procurement categories (CPV): " + ", ".join(cpvs))
-    if regions:
-        parts.append("Has delivered public contracts in: " + ", ".join(regions))
-    parts.append(f"Track record of {len(awards)} awarded public contract(s).")
-    return ". ".join(parts)
+    """Text embedded for semantic matching (G6).
+
+    Concatenates each award's `notice_title` + `description` (the original-language
+    procurement text — the richest semantic signal), capped at
+    ``_CAPABILITY_TEXT_CHARS``. This mirrors the v5 trainer's company-profile text,
+    so the in-app embeddings match the distribution the LR's semantic coefficient
+    was trained on. Falls back to the company name when no award text is available
+    (older awards predating the enrichment columns). CPV/NUTS/region/value are not
+    in the text — they are captured as structured features instead.
+    """
+    chunks: list[str] = []
+    for award in awards:
+        parts = [
+            str(p).strip()
+            for p in (award.notice_title, award.description)
+            if p and str(p).strip()
+        ]
+        if parts:
+            chunks.append(" ".join(parts))
+    blob = " ".join(chunks)[:_CAPABILITY_TEXT_CHARS].strip()
+    return blob or company.canonical_name
 
 
 def build_company_profiles(
@@ -111,7 +135,7 @@ def build_company_profiles(
 
     for company in session.scalars(company_stmt).all():
         awards = session.scalars(
-            sa.select(Award).where(Award.winner_canonical_id == company.id)
+            sa.select(Award).where(Award.winner_canonical_id == company.id).order_by(Award.id)
         ).all()
 
         capability_text = build_capability_text(company, awards)

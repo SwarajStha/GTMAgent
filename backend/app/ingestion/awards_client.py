@@ -42,6 +42,20 @@ AWARD_FIELDS: list[str] = [
     "publication-date",
     "notice-type",
     "classification-cpv",
+    # Enrichment for ML training (verified populated live 2026-06-16):
+    #   notice-title 20/20, description-proc 20/20, procedure-type 20/20,
+    #   place-of-performance-subdiv ~13/20, buyer-country-sub 20/20.
+    #   winner-identifier/winner-country/BT-720-Tender-Currency 18/20 (already
+    #   requested below). See scripts/field_discovery output.
+    "notice-title",
+    "title-proc",
+    "description-proc",
+    "description-lot",
+    "procedure-type",
+    "BT-105-Procedure",
+    "place-of-performance-subdiv-proc",
+    "place-of-performance-subdiv-lot",
+    "buyer-country-sub",
     # Buyer — keep Job-1-proven keys, add structured-org fallbacks.
     "buyer-name",
     "buyer-country",
@@ -148,7 +162,14 @@ def _process_notice_persistent(
     the caller can catch + count + the savepoint auto-rolls-back.
     """
     with session.begin_nested():
-        company = resolve_or_create(session, row.winner_raw_name, row.buyer_country)
+        # winner_country is the company's own country (more accurate than the
+        # buyer's); identifier (tax id) is the primary dedup key when present.
+        company = resolve_or_create(
+            session,
+            row.winner_raw_name,
+            country=row.winner_country or row.buyer_country,
+            identifier=row.winner_identifier,
+        )
         is_new_company = company.id is None
         session.flush()  # assigns Company.id so we can FK to it
         row.winner_canonical_id = company.id
@@ -240,9 +261,12 @@ def _run_persist(
     summary: dict[str, int],
 ) -> None:
     with get_session() as session:
-        for page in client.search_all_pages(query=query, fields=AWARD_FIELDS):
+        for page_num, page in enumerate(
+            client.search_all_pages(query=query, fields=AWARD_FIELDS), start=1
+        ):
             for notice in _iter_notices(page):
                 if limit is not None and summary["fetched"] >= limit:
+                    session.commit()
                     return
                 if _is_no_winner_notice(notice):
                     summary["skipped_no_winner"] += 1
@@ -271,6 +295,20 @@ def _run_persist(
                 summary["new" if inserted else "updated"] += 1
                 if is_new_company:
                     summary["companies_created"] += 1
+            # Commit each page so progress is durable + visible, and a late
+            # failure doesn't roll back the whole back-fill.
+            session.commit()
+            logger.info(
+                "Page %d committed: fetched=%d new=%d updated=%d companies=%d "
+                "skipped_no_winner=%d errors=%d",
+                page_num,
+                summary["fetched"],
+                summary["new"],
+                summary["updated"],
+                summary["companies_created"],
+                summary["skipped_no_winner"],
+                summary["errors"],
+            )
 
 
 def _parse_or_count_error(

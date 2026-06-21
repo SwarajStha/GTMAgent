@@ -95,8 +95,18 @@ class Company(Base):
     __tablename__ = "companies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    canonical_name: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
-    resolution_key: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
+    # canonical_name / resolution_key are indexed but NOT unique (migration
+    # 0008): when `registration_id` (tax id) disambiguates two distinct legal
+    # entities that share a trading name, they may legitimately occupy two
+    # rows with the same name/key. Dedup is enforced in `resolve_or_create`,
+    # not by a DB constraint.
+    canonical_name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
+    resolution_key: Mapped[str] = mapped_column(Text, index=True, nullable=False)
+    # Tax / registration id from TED `winner-identifier`. Stronger dedup key
+    # than name normalisation when present; NULL when TED omitted it.
+    registration_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True
+    )
     aliases: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -121,13 +131,29 @@ class Award(Base):
         String(64), unique=True, index=True, nullable=False
     )
     cpv_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Enrichment for ML training (migration 0007). What the contract was, how
+    # it was procured, where the work is, and who won — the features the
+    # matching model needs to learn "which notice goes to which company".
+    # notice_title/description are original-language (multilingual e5 handles
+    # cross-lang); procedure_type is the eForms code (open/restricted/...);
+    # nuts_code is the place-of-performance NUTS-3 (buyer region fallback);
+    # contract_currency makes contract_value_eur interpretable (TED does NOT
+    # convert — the value is in this currency); winner_identifier is the tax/
+    # registration id (stronger dedup key than name normalisation).
+    notice_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    procedure_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    nuts_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     buyer_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     buyer_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     winner_raw_name: Mapped[str] = mapped_column(Text, nullable=False)
+    winner_identifier: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    winner_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     winner_canonical_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("companies.id"), nullable=True, index=True
     )
     contract_value_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
+    contract_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     award_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     n_offers_received: Mapped[int | None] = mapped_column(Integer, nullable=True)
     raw_json: Mapped[dict] = mapped_column(JSON, nullable=False)
@@ -185,6 +211,12 @@ class CompanyProfile(Base, TimestampMixin):
     capabilities: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     certifications: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
+    # Provenance + idempotent upsert key when a profile is derived from an
+    # award-winner `companies` row (Layer 1 supplier-pool builder). NULL for
+    # profiles created another way (e.g. future web scraping).
+    source_company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), unique=True, index=True, nullable=True
+    )
 
     matches: Mapped[list["Match"]] = relationship(back_populates="company")
 
@@ -223,6 +255,14 @@ class Email(Base, TimestampMixin):
     )
     match_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("matches.id"), nullable=False, index=True
+    )
+    # 'supplier' (per-match outreach to the matched company) or 'buyer'
+    # (per-tender digest to the tender issuer, anchored to its top match).
+    recipient_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="supplier", default="supplier"
+    )
+    tender_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("tenders.id"), nullable=True, index=True
     )
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)

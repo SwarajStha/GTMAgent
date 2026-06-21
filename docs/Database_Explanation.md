@@ -1,39 +1,49 @@
 # Database explanation
 
-Reference for teammates. Snapshot of the GTMAgent Postgres schema as of **2026-05-17** (branch `feat/awards-back-fill`, migrations `0001` + `0002` applied).
+Reference for teammates. Snapshot of the GTMAgent Postgres schema as of **2026-06-17** (branch `feat/pipeline-integration-ML-backend-frontend`, migrations `0001` → `0008` applied).
+
+> Earlier snapshot (2026-05-17, migrations `0001`+`0002`) is preserved in the
+> sample-row blocks below — those small 5-row samples predate the full awards
+> back-fill and are kept as illustrative examples, not current counts.
 
 ## At a glance
 
 - **Engine**: Postgres 16 with the `pgvector` extension (image `pgvector/pgvector:pg16`), running in Docker via `docker-compose.yml`.
-- **Schema management**: Alembic migrations in [backend/app/db/migrations/versions/](../backend/app/db/migrations/versions/). Two migrations applied so far — see [§ Migration history](#migration-history).
+- **Schema management**: Alembic migrations in [backend/app/db/migrations/versions/](../backend/app/db/migrations/versions/). **Eight** migrations applied (`0001` → `0008`) — see [§ Migration history](#migration-history).
 - **ORM**: SQLAlchemy 2.x typed `Mapped[]` models in [backend/app/db/models.py](../backend/app/db/models.py).
-- **Connection strings** (see [README](../README.md#environment)):
+- **Connection strings** (see [README](../README.md#connection-strings)):
   - `DATABASE_URL` — pooled, port `6543`, used by the FastAPI app at runtime.
   - `DATABASE_URL_DIRECT` — direct, port `5432`, used by Alembic only.
+  - `DATABASE_URL_TEST` — direct, db `gtm_test`, used by the pytest fixtures.
 
-### Table inventory (10 tables)
-
---- see docs/Table Sample/17-05-2026
+### Table inventory (11 tables + `alembic_version`)
 
 | Table | Phase | Status | Purpose |
 |---|---|---|---|
-| `tenders` | 2 (Job 1) | **populated** (5 rows) | Active EU procurement notices polled from TED |
-| `awards` | 2 (Job 2) | **populated** (5 rows) | Historic contract awards from TED — who won what |
-| `companies` | 2 (Job 2) | **populated** (5 rows) | Canonical legal entities resolved from award winners |
-| `documents` | 2 (Job 3) | empty | PDF tender dossiers (downloaded from `tenders.document_url`) |
-| `company_profiles` | 5 | empty | Scraped capability profiles of vendors we pitch to |
-| `matches` | 3 | empty | Tender × company scoring results |
-| `emails` | 4 | empty | LLM-generated outreach drafts |
-| `feedback` | 5 | empty | Thumbs-up/down ratings on emails (drives weight retraining) |
+| `tenders` | 2 (Job 1) | **populated** (~10 rows) | Active EU procurement notices polled from TED |
+| `awards` | 2 (Job 2) | **populated** (~21k rows after full back-fill) | Historic contract awards from TED — who won what |
+| `companies` | 2 (Job 2) | **populated** (~15k rows) | Canonical legal entities resolved from award winners |
+| `documents` | 2 (Job 3) | **populated** | PDF tender dossiers (downloaded from `tenders.document_url`) + extracted text |
+| `company_profiles` | 3 | **populated** | Matchable supplier profiles (capability text + 384-d embedding), derived from award winners |
+| `matches` | 3 | **populated** | Tender × company-profile scoring results |
+| `emails` | 4 | **populated** | Outreach drafts — supplier + buyer recipient types |
+| `feedback` | 5 | live (endpoint) | Thumbs-up/down ratings (drives future weight retraining) |
 | `embeddings` | future | empty | Generic vector store for cross-model embeddings |
-| `alembic_version` | meta | n/a | Tracks which migration is currently applied |
+| `agent_runs` | 6 | live (agent) | Records each Claude agent execution (goal, steps, output) |
+| `alembic_version` | meta | n/a | Tracks which migration is currently applied (head: `0008`) |
+
+> Row counts above are the dev-DB state after the full awards back-fill (exported
+> to [`exports/`](../exports/README.md)). `tenders` / `company_profiles` /
+> `matches` / `emails` reflect the matching-pipeline smoke run (one tender ranked,
+> top suppliers drafted) — see
+> [matching_pipeline_smoke_record.md](matching_pipeline_smoke_record.md).
 
 ## Relationship map
 
 The schema has **two disconnected sub-graphs** by design — there is no direct FK between them.
 
 ```
-┌─ INGESTION (live now) ─────────────────────────────────────────────┐
+┌─ INGESTION (live) ─────────────────────────────────────────────────┐
 │                                                                    │
 │   tenders ──┐                          awards                      │
 │   (int PK)  │                          (int PK)                    │
@@ -42,36 +52,46 @@ The schema has **two disconnected sub-graphs** by design — there is no direct 
 │             └──> matches.tender_id          (via winner_canonical_id)│
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
-
-┌─ MATCHING / EMAILS (Phase 3+, all empty) ──────────────────────────┐
+        │  Layer 1: companies + their awards ──build_company_profiles──┐
+        ▼                                                              ▼
+┌─ MATCHING / EMAILS (live) ─────────────────────────────────────────┐
 │                                                                    │
-│   matches ──┬──> company_profiles.id   ┌── emails.match_id         │
-│   (UUID PK) │   (the demand side)      │                           │
-│             └────────────────────────  ┘                           │
+│   company_profiles ──(source_company_id → companies.id, the bridge) │
+│   (UUID PK)                                                         │
+│                                                                    │
+│   matches ──┬──> company_profiles.id   ┌── emails.match_id          │
+│   (UUID PK) ├──> tenders.id            ├── emails.tender_id         │
+│             └── (Layer 2 writes these) └── (supplier + buyer drafts)│
 │                                                                    │
 │   emails ───┬──> feedback.email_id                                 │
-│             │                                                      │
 │   matches ──┴──> feedback.match_id                                 │
 │                                                                    │
-│   embeddings (no FKs, stores vectors keyed by source_type+source_id)│
+│   embeddings (no FKs, vectors keyed by source_type+source_id)       │
+│   agent_runs (no FKs, one row per Claude agent execution)           │
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
-
 ```
+
+**The bridge between the two sub-graphs is `company_profiles.source_company_id`**
+(a nullable FK to `companies.id`). Layer 1 of the matcher
+(`build_company_profiles`) walks each award-winner `companies` row + its `awards`
+history and derives a matchable `company_profiles` row from it. So the two halves
+are no longer disconnected at runtime — they are joined by the profile-builder,
+not by a row-level FK on `awards`.
 
 ### The roles of each table in matching
 
 The mapping from "tenders + awards + scraping":
 
 tenders — the demand side. Live procurement opportunities. Each row is "someone wants X built / X service supplied — bid by date Y". These are what we're matching for.
-company_profiles (Phase 5, empty) — the supply side. The pool of vendors we pitch to. Each row will be a scraped capability profile (website, certifications, embedding). This is what tenders gets matched against. Web scraping populates this table, not tenders.
+company_profiles (populated) — the supply side. The pool of suppliers we rank. Each row is a capability profile (capability text + 384-d embedding). In the MVP these are **derived from award winners** by the profile builder (`source_company_id → companies.id`); web scraping to enrich them is future work.
 
-awards (Job 2, just populated) — historical signal, not the supply side. Tells us who has actually won past contracts in each CPV category. Two main uses:
-Validate company_profiles: if a vendor we have in the pool has won similar contracts before, that's a strong positive signal.
+awards (populated, ~21k rows) — historical signal AND the seed for the supply side. Tells us who has actually won past contracts in each CPV category. Uses:
+Build the pool: the profile builder turns each award-winner company + its award history into a `company_profiles` row.
 
-Discover candidates: companies that consistently win in our target CPV categories are good additions to company_profiles.
+Discover/validate candidates: companies that consistently win in our target CPV categories are strong matches.
 
-So the matching pipeline is tenders × company_profiles → matches. awards informs the scoring but isn't a direct input.
+So the matching pipeline is tenders × company_profiles → matches, and awards (via companies) is what currently populates company_profiles.
 
 ```
 
@@ -101,9 +121,12 @@ One small subtlety: TED's scope=ACTIVE means "currently published", not "current
 
 ## Populated tables
 
-### `tenders` — 5 rows, populated by Job 1
+### `tenders` — ~10 rows, populated by Job 1
 
 Source of all open EU procurement notices we want to match companies against. One row per TED Contract Notice (CN). Upserted by [poll_contract_notices()](../backend/app/ingestion/ted_client.py) keyed on `ted_notice_id`.
+
+> The sample rows below are the original 5-row Job-1 smoke (2026-05-17), kept as
+> an illustration of the column shapes. Run a fresh `--days N` poll to add more.
 
 **Columns:**
 
@@ -170,11 +193,11 @@ deadline        | 2026-06-25 04:00:00+02
 budget_eur      | (null)
 ```
 
-### `awards` — 5 rows, populated by Job 2
+### `awards` — ~21k rows after the full back-fill (populated by Job 2)
 
-Historic contract awards. One row per TED Contract Award Notice (CAN) where a winner was selected. Notices that were cancelled-without-winner (`BT-142-LotResult = clos-nw`) are intentionally skipped at ingest time. Upserted by [backfill_awards()](../backend/app/ingestion/awards_client.py) keyed on `ted_notice_id`.
+Historic contract awards. One row per TED Contract Award Notice (CAN) where a winner was selected. Notices that were cancelled-without-winner (`BT-142-LotResult = clos-nw`) are intentionally skipped at ingest time. Upserted by [backfill_awards()](../backend/app/ingestion/awards_client.py) keyed on `ted_notice_id`. The full 24-month back-fill produced **~21,015 awards / ~15,129 companies** (exported to [`exports/`](../exports/README.md) for the ML model).
 
-**Columns:**
+**Columns** (the last block is the migration `0007` ML-enrichment set):
 
 | Column | Type | Notes |
 |---|---|---|
@@ -185,11 +208,18 @@ Historic contract awards. One row per TED Contract Award Notice (CAN) where a wi
 | `buyer_country` | varchar(8), nullable | ISO alpha-3 |
 | `winner_raw_name` | text, **NOT NULL** | Winner name as TED returned it, pre-canonicalisation |
 | `winner_canonical_id` | int, FK → `companies.id`, nullable | Set by `resolve_or_create` during ingest |
-| `contract_value_eur` | float, nullable | Awarded contract value. **Note: `-1.0` is TED's "value withheld" sentinel** |
+| `contract_value_eur` | float, nullable | Awarded contract value. **Read with `contract_currency` — TED does NOT convert to EUR. `-1`/`0` are "not disclosed" sentinels.** |
 | `award_date` | date, nullable | Contract conclusion / winner decision date |
 | `n_offers_received` | int, nullable | How many tenders were submitted for the winning lot |
 | `raw_json` | json | Full original TED notice — preserved for evidence |
 | `ingested_at` | timestamptz | When first inserted |
+| `notice_title` | text, nullable | Contract title — **original language** (multilingual) |
+| `description` | text, nullable | Full scope text — **original language**; richest semantic signal for matching |
+| `procedure_type` | varchar(32), nullable | eForms code: `open` / `restricted` / `neg-w-call` / … |
+| `nuts_code` | varchar(16), nullable | NUTS-3 region of the work (buyer region fallback) |
+| `winner_identifier` | varchar(64), nullable | Winner tax/registration id from TED (secondary dedup key) |
+| `winner_country` | varchar(8), nullable | Winner country (alpha-3) |
+| `contract_currency` | varchar(8), nullable | Currency of `contract_value_eur` (17 currencies seen — PLN, CHF, …) |
 
 **Sample rows** (3 of 5):
 
@@ -234,22 +264,31 @@ award_date           | 2026-02-04
 n_offers_received    | 6
 ```
 
-### `companies` — 5 rows, populated by Job 2 via entity resolution
+### `companies` — ~15k rows, populated by Job 2 via entity resolution
 
-Canonical legal entities, one row per unique winning organisation across all awards. Variant spellings ("Hochtief AG" / "Hochtief Aktiengesellschaft") collapse to one row via the normalised `resolution_key`. Populated by [entity_resolution.resolve_or_create()](../backend/app/ingestion/entity_resolution.py).
+Canonical legal entities, one row per unique winning organisation across all awards. Variant spellings ("Hochtief AG" / "Hochtief Aktiengesellschaft") collapse to one row. Populated by [entity_resolution.resolve_or_create()](../backend/app/ingestion/entity_resolution.py), which since migration `0008` is **identifier-first**: it matches on `registration_id` (tax id) when present, else on the normalised `resolution_key`.
 
 **Columns:**
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | int PK | autoincrement |
-| `canonical_name` | text | UNIQUE INDEX — first raw name we saw for this entity |
-| `resolution_key` | text | UNIQUE INDEX — normalised key used to dedupe variant spellings |
+| `id` | int PK | autoincrement — the **only** hard-unique column now |
+| `canonical_name` | text | INDEX (not unique since `0008`) — first raw name we saw |
+| `resolution_key` | text | INDEX (not unique since `0008`) — normalised dedup key |
+| `registration_id` | varchar(64), nullable, indexed | Tax/registration id from `winner-identifier`; stronger dedup key than name when present |
 | `aliases` | json (list of str) | All raw names we've seen mapping to this entity |
 | `country` | varchar(8), nullable | Inherited from the award's buyer (winner-country would be better — future improvement) |
 | `created_at` | timestamptz | When this entity was first encountered |
 
-**Normalisation logic** (in `normalise_name()`):
+> **Why the unique constraints were relaxed (`0008`)**: `registration_id` lets two
+> distinct legal entities that happen to share a trading name occupy two rows
+> (correctly), and merges variant spellings that share an id. So name/key can no
+> longer be globally unique — dedup is enforced in `resolve_or_create`, not by a DB
+> constraint. `clean_identifier()` rejects junk ids (all-zeros, textual placeholders
+> like German `"keine Angabe"` = "no information") that would otherwise false-merge
+> every firm reporting them onto one row.
+
+**Normalisation logic** (in `normalise_name()`, the fallback when no `registration_id`):
 1. Lowercase + strip whitespace
 2. Delete punctuation `[,.&/\\-]` (so "A.B. Bau" → "ab bau", not "a b bau")
 3. Collapse internal whitespace
@@ -276,43 +315,55 @@ Worth noticing in this sample:
 
 ---
 
-## Scaffold tables (empty until later phases)
+## Matching, emails & agent tables
 
-These exist in the schema today but are populated by future jobs. Schemas are summarised for reference.
+These were scaffold-only in the 2026-05-17 snapshot; they are now populated by
+the matching pipeline, the email backend, and the agent. Schemas reflect the
+current models in [models.py](../backend/app/db/models.py).
 
-### `documents` — Phase 2 (Job 3, pending)
+### `documents` — Phase 2 (Job 3, populated)
 
-Will hold tender-dossier PDFs downloaded from `tenders.document_url`. One PDF per row, optionally with PyMuPDF-extracted text.
+One row per attempted-or-completed dossier download from `tenders.document_url`. `tender_id` is **UNIQUE** (at most one document per tender — the upsert keys on it). PyMuPDF extracts text into `extracted_text` (capped 100k chars).
 
-Columns: `id UUID PK`, `tender_id INTEGER FK→tenders.id`, `filename TEXT`, `storage_path TEXT`, `is_restricted BOOL`, `text_content TEXT`, `created_at`, `updated_at`.
+Columns: `id INT PK`, `tender_id INT FK→tenders.id (UNIQUE)`, `source_url TEXT`, `storage_path TEXT (nullable)`, `extracted_text TEXT (nullable)`, `is_restricted BOOL`, `download_failed BOOL`, `file_hash VARCHAR(64) (sha256 dedup)`, `downloaded_at TIMESTAMP (nullable)`.
 
-`is_restricted = True` when the PDF lives behind a buyer portal that needs login (won't be auto-downloaded).
+Two independent failure flags: `is_restricted = True` when the URL returned 401/403 (portal needs login); `download_failed = True` for non-auth failures (timeout, 5xx, non-PDF body). There is **no** `filename` or `text_content` column — the email backend derives a display label from `storage_path`/`source_url`, and the text column is `extracted_text`.
 
-### `company_profiles` — Phase 5 (pending)
+### `company_profiles` — Phase 3 (populated by the profile builder)
 
-The **demand side** of matching. Distinct from `companies` — `company_profiles` will hold scraped capability profiles of vendors we want to pitch to (website, certifications, capabilities), with embeddings for semantic matching. Different lifecycle, different PK type (`UUID` to match `matches`).
+The matchable **supply side**. Distinct from `companies`: `company_profiles` holds capability text + an embedding for semantic matching. In the MVP, [profile_builder.build_company_profiles()](../backend/app/matching/profile_builder.py) derives one row per award-winner `companies` row (no web scraping yet — capability text = name + CPV codes + regions). UUID PK to match `matches`.
 
-Columns: `id UUID PK`, `name TEXT`, `country VARCHAR(8)`, `website TEXT`, `capabilities JSONB`, `certifications JSONB`, **`embedding Vector(384)`** (MiniLM-L6 dimension), `created_at`, `updated_at`.
+Columns: `id UUID PK`, `name TEXT`, `country VARCHAR(8)`, `website TEXT`, `capabilities JSONB` (`{text, cpv_codes, deal_size_eur, regions}`), `certifications JSONB`, **`embedding Vector(384)`** (MiniLM-L6 dimension), **`source_company_id INT FK→companies.id (UNIQUE, nullable)`** — the idempotent upsert key + bridge back to the legal entity, `created_at`, `updated_at`.
 
-### `matches` — Phase 3 (pending)
+### `matches` — Phase 3 (populated)
 
-Result rows from the matching pipeline. One row per (`tender`, `company_profile`) pair the pipeline considered.
+Result rows from the matching pipeline. One row per (`tender`, `company_profile`) pair the pipeline scored. `MatchingPipeline.run` clears and rewrites a tender's matches on each run (idempotent recompute).
 
-Columns: `id UUID PK`, `tender_id INT FK→tenders.id`, `company_id UUID FK→company_profiles.id`, four sub-scores (`semantic_score`, `budget_score`, `location_score`, `qualification_score`), `final_score FLOAT (idx)`, `weights JSONB` (the LR weights used), `explanation TEXT`, `is_disqualified BOOL`.
+Columns: `id UUID PK`, `tender_id INT FK→tenders.id`, `company_id UUID FK→company_profiles.id`, four sub-scores (`semantic_score`, `budget_score`, `location_score`, `qualification_score`), `final_score FLOAT (idx)`, `weights JSONB` (the combiner weights used — default `0.40/0.20/0.20/0.20`, will become LR-learned), `explanation TEXT`, `is_disqualified BOOL`.
 
 `final_score` is the sort key for ranked output.
 
-### `emails` — Phase 4 (pending)
+### `emails` — Phase 4 (populated)
 
-LLM-generated outreach drafts. One row per email sent (or scheduled).
+Outreach drafts. Two recipient types share the table via `recipient_type`:
+- **`supplier`** — per-match outreach to the matched company (`POST /api/v1/emails/{match_id}/generate`).
+- **`buyer`** — per-tender digest recommending the top suppliers, anchored to the tender's top match (`POST /api/v1/emails/buyer/{tender_id}/generate`).
 
-Columns: `id UUID PK`, `match_id UUID FK→matches.id`, `subject TEXT`, `body TEXT`, `evidence JSONB` (extracted passages from `documents.text_content` that grounded the email), `status VARCHAR(32)` (default `'draft'`), `sent_at TIMESTAMPTZ`.
+Drafts are currently deterministic (assembled from match evidence), not yet Claude-written.
 
-### `feedback` — Phase 5 (pending)
+Columns: `id UUID PK`, `match_id UUID FK→matches.id`, **`recipient_type VARCHAR(16)`** (`'supplier'`/`'buyer'`), **`tender_id INT FK→tenders.id (nullable)`**, `subject TEXT`, `body TEXT`, `evidence JSONB` (the tender/company/score context that grounded the draft), `status VARCHAR(32)` (default `'draft'`), `sent_at TIMESTAMPTZ`.
 
-Captures thumbs-up/thumbs-down ratings teammates give on emails. Drives the LR weight retraining job.
+### `feedback` — Phase 5 (endpoint live)
+
+Thumbs-up/thumbs-down ratings on matches (+ optional email). `POST /api/v1/feedback` writes these; the LR weight-retraining job that consumes them is still pending.
 
 Columns: `id UUID PK`, `match_id UUID FK`, `email_id UUID FK (nullable)`, `rating SMALLINT` (+1 or −1), `comment TEXT`.
+
+### `agent_runs` — Phase 6 (written by the agent)
+
+One row per `AgentController.run()` execution (including truncated runs). Powers the reflection loop, which reads recent runs + feedback.
+
+Columns: `id UUID PK`, `goal TEXT`, `steps JSONB` (the tool calls + args the agent made), `output TEXT`, `created_at`, `updated_at`.
 
 ### `embeddings` — future
 
@@ -322,11 +373,11 @@ Columns: `id UUID PK`, `source_type VARCHAR(32) (idx)` (e.g. `'tender'`, `'compa
 
 ### `alembic_version` — meta
 
-Single-row table that records the migration head Alembic believes is applied. Today it should contain `0002_awards_companies`.
+Single-row table that records the migration head Alembic believes is applied. Today it should contain `0008_company_registration_id`.
 
 ```sql
 SELECT version_num FROM alembic_version;
--- 0002_awards_companies
+-- 0008_company_registration_id
 ```
 
 If `alembic upgrade head` ever fails mid-migration, this row is what you check to see what state the DB thinks it's in.
@@ -337,8 +388,14 @@ If `alembic upgrade head` ever fails mid-migration, this row is what you check t
 
 | Revision | File | What it did |
 |---|---|---|
-| `0001_initial_schema` | [0001_initial_schema.py](../backend/app/db/migrations/versions/0001_initial_schema.py) | Created all 8 scaffold tables in one shot, plus `CREATE EXTENSION vector`. **Was edited in place during Job 1** to give `tenders` its final Job-1 shape (int PK, JSONB cpv_codes, etc.) before any production data existed — see [docs/architecture.md](architecture.md) for the rationale. |
-| `0002_awards_companies` | [0002_awards_companies.py](../backend/app/db/migrations/versions/0002_awards_companies.py) | **Additive** — dropped the scaffold `awards` table (UUID PK, FK to tenders) and recreated it with the Job 2 shape (int PK, `winner_canonical_id` FK to new `companies` table). Created `companies`. Preserves Job 1 tender rows. |
+| `0001_initial_schema` | [0001](../backend/app/db/migrations/versions/0001_initial_schema.py) | Created all scaffold tables in one shot, plus `CREATE EXTENSION vector`. **Was edited in place during Job 1** to give `tenders` its final Job-1 shape (int PK, JSONB cpv_codes, etc.) before any production data existed — see [docs/architecture.md](architecture.md) for the rationale. |
+| `0002_awards_companies` | [0002](../backend/app/db/migrations/versions/0002_awards_companies.py) | **Additive** — dropped the scaffold `awards` (UUID PK) and recreated it with the Job 2 shape (int PK, `winner_canonical_id` FK to new `companies` table). Created `companies`. Preserves Job 1 tender rows. |
+| `0003_add_documents` | [0003](../backend/app/db/migrations/versions/0003_add_documents.py) | **Additive** — dropped the scaffold `documents` and recreated it with the Job 3 shape (int PK, UNIQUE FK to tenders, `source_url`/`storage_path`/`extracted_text`/`file_hash`/`is_restricted`/`download_failed`/`downloaded_at`). |
+| `0004_agent_runs` | [0004](../backend/app/db/migrations/versions/0004_agent_runs.py) | Created `agent_runs` (Phase 6 — records Claude agent executions). |
+| `0005_company_profile_source` | [0005](../backend/app/db/migrations/versions/0005_company_profile_source.py) | Added `company_profiles.source_company_id` (UNIQUE FK to `companies.id`) — the profile-builder's idempotent upsert key + bridge between the two sub-graphs. |
+| `0006_buyer_emails` | [0006](../backend/app/db/migrations/versions/0006_buyer_emails.py) | Added `emails.recipient_type` (`supplier`/`buyer`) + `emails.tender_id` to support the buyer-facing digest. |
+| `0007_award_enrichment` | [0007](../backend/app/db/migrations/versions/0007_award_enrichment.py) | Added 7 ML-enrichment columns to `awards` (`notice_title`, `description`, `procedure_type`, `nuts_code`, `winner_identifier`, `winner_country`, `contract_currency`). |
+| `0008_company_registration_id` | [0008](../backend/app/db/migrations/versions/0008_company_registration_id.py) | Added `companies.registration_id` (tax id); **relaxed** `canonical_name`/`resolution_key` from UNIQUE to plain indexes so identifier-first resolution can split/merge entities. Current **head**. |
 
 **Forward pattern (Job 3+)**: new migration files only. Do NOT edit committed migrations in place. The Job 1 in-place edit was a one-time exception while the DB had no production data.
 
@@ -357,15 +414,21 @@ docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT version_num FROM ale
 
 ---
 
-## Future roadmap (Phase 3+)
+## Roadmap status
 
-In rough order of when each scaffold table comes online:
+Done:
 
-1. **Job 3 — dossier downloader** populates `documents`. PDFs fetched from `tenders.document_url`, PyMuPDF extracts text into `documents.text_content`. Phase 2.
-2. **Job 4 — APScheduler loop** runs Jobs 1–3 on a schedule (daily tender poll, weekly awards back-fill, dossier download on insert).
-3. **Phase 3 — matching engine** populates `company_profiles` (initially seeded by hand from a curated vendor list), then runs the `MatchingPipeline` to compute sub-scores and write `matches` rows. The sub-scores are weighted by an LR model whose weights live in `matches.weights`.
-4. **Phase 4 — generation** picks high-`final_score` matches, drafts emails via Claude tool-use grounded in `documents.text_content`, writes to `emails`.
-5. **Phase 5 — feedback loop** captures thumbs-up/down via `feedback`, retrains the LR weights from accumulated signal, refreshes `company_profiles.embedding` periodically. Also where multi-tenant auth lands.
+1. ✅ **Job 3 — dossier downloader** populates `documents`. PDFs fetched from `tenders.document_url`, PyMuPDF extracts text into `documents.extracted_text`.
+2. ✅ **Phase 3 — matching engine** populates `company_profiles` (derived from award winners by the profile builder — not yet a curated/scraped pool), then runs the `MatchingPipeline` to compute sub-scores and write `matches`. Weights snapshot to `matches.weights`.
+3. ✅ **Phase 4 — generation** drafts supplier + buyer emails from match evidence, writes to `emails` (deterministic for now; Claude-written is the planned upgrade).
+4. ✅ **Phase 6 — agent** records executions to `agent_runs`; the reflection loop reads them + `feedback`.
+
+Still pending:
+
+5. **Job 4 — APScheduler loop** — run Jobs 1–3 on a schedule (daily tender poll, weekly awards back-fill). CLI exists; the loop is a stub.
+6. **Understanding layer** — Claude `FieldExtractor` to turn raw notices + dossier text into a structured `TenderProfile`.
+7. **Phase 5 — feedback → retraining** — `feedback` is captured; the LR weight learner that retrains from it (and refreshes embeddings) is not yet wired. Also where multi-tenant auth lands.
+8. **Richer `company_profiles`** — enrich capability text from dossier text / web scraping so semantic scores stop being thin (see [matching_pipeline_smoke_record.md](matching_pipeline_smoke_record.md)).
 
 ---
 

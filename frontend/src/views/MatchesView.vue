@@ -37,12 +37,6 @@ const weightTotal = computed(
     weights.value.qualification,
 )
 
-const activeTenderOptions = computed(() =>
-  tendersStore.items.filter((tender) =>
-    matchesStore.items.some((match) => match.tenderId === tender.id),
-  ),
-)
-
 const selectedTenderFilter = computed(() =>
   tenderFilter.value === 'all'
     ? null
@@ -123,6 +117,28 @@ async function generateEmail() {
   }
 }
 
+async function findMatches() {
+  if (tenderFilter.value === 'all') return
+  actionMessage.value = ''
+  try {
+    await matchesStore.runMatching(tenderFilter.value)
+    actionMessage.value = 'Matching complete — ranked suppliers updated'
+  } catch {
+    actionMessage.value = matchesStore.error ?? 'Run matching failed'
+  }
+}
+
+async function emailBuyer() {
+  if (tenderFilter.value === 'all') return
+  actionMessage.value = ''
+  try {
+    const draft = await emailsStore.generateBuyer(tenderFilter.value)
+    actionMessage.value = `Buyer email drafted: ${draft.subject}`
+  } catch {
+    actionMessage.value = emailsStore.error ?? 'Buyer email failed'
+  }
+}
+
 async function submitFeedback(rating: 1 | -1) {
   if (!selectedMatch.value) return
   actionMessage.value = ''
@@ -147,7 +163,7 @@ async function submitFeedback(rating: 1 | -1) {
         <h2 class="mt-1 section-title">Rank companies by evidence fit</h2>
         <select v-model="tenderFilter" class="field mt-4 w-full">
           <option value="all">All tenders</option>
-          <option v-for="tender in activeTenderOptions" :key="tender.id" :value="tender.id">
+          <option v-for="tender in tendersStore.items" :key="tender.id" :value="tender.id">
             {{ tender.title }}
           </option>
         </select>
@@ -160,6 +176,24 @@ async function submitFeedback(rating: 1 | -1) {
         <p class="mt-3 text-xs font-bold text-slate-500">
           {{ selectedTenderFilter ? 'Showing top 5 for selected tender' : 'Showing all ranked matches' }}
         </p>
+        <div v-if="tenderFilter !== 'all'" class="mt-4 flex flex-wrap gap-2">
+          <button
+            class="btn-secondary h-8 px-3 text-xs"
+            type="button"
+            :disabled="matchesStore.loading"
+            @click="findMatches"
+          >
+            {{ matchesStore.loading ? 'Matching...' : 'Find matches' }}
+          </button>
+          <button
+            class="btn-secondary h-8 px-3 text-xs"
+            type="button"
+            :disabled="emailsStore.loading"
+            @click="emailBuyer"
+          >
+            Email buyer (top suppliers)
+          </button>
+        </div>
       </div>
 
       <div class="surface p-4">

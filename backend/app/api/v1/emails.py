@@ -43,6 +43,7 @@ class EmailOut(BaseModel):
 
     id: uuid.UUID
     match_id: uuid.UUID
+    recipient_type: str
     subject: str
     body: str
     evidence: dict[str, Any] | None
@@ -83,6 +84,7 @@ def _email_out(
     return EmailOut(
         id=email.id,
         match_id=email.match_id,
+        recipient_type=email.recipient_type,
         subject=email.subject,
         body=email.body,
         evidence=email.evidence,
@@ -220,6 +222,8 @@ def generate_email(
 
     email = Email(
         match_id=match.id,
+        tender_id=tender.id,
+        recipient_type="supplier",
         subject=draft["subject"],
         body=draft["body"],
         evidence=evidence,
@@ -230,6 +234,102 @@ def generate_email(
     db.refresh(email)
 
     return _email_out(email, tender, company)
+
+
+def _draft_buyer_email(
+    tender: Tender, ranked: list[tuple[Match, CompanyProfile]]
+) -> dict[str, str]:
+    """Buyer-facing draft: tell the tender issuer which suppliers fit best."""
+    title = tender.title or f"TED notice {tender.ted_notice_id}"
+    buyer = tender.buyer_name or "team"
+    lines = [
+        f"1. {company.name}"
+        + (f" ({company.country})" if company.country else "")
+        + f" — fit {match.final_score:.0%}"
+        + (f"\n   {match.explanation}" if match.explanation else "")
+        for match, company in ranked
+    ]
+    subject = f"Recommended suppliers for {title} ({tender.ted_notice_id})"
+    body = (
+        f"Hi {buyer},\n\n"
+        f"We analysed the market for your tender '{title}' and identified "
+        f"{len(ranked)} supplier(s) that strongly match its requirements:\n\n"
+        + "\n".join(lines)
+        + "\n\nThese rankings combine semantic fit, budget alignment, location, and "
+        "qualifications. I'm happy to share the full evidence table for any of them.\n\n"
+        "Best,\nGTM Agent"
+    )
+    return {"subject": subject, "body": body}
+
+
+@router.post("/buyer/{tender_id}/generate")
+def generate_buyer_email(
+    tender_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    top_n: int = 3,
+) -> EmailOut:
+    """Generate a buyer-facing digest recommending a tender's top supplier matches."""
+    tender = db.get(Tender, tender_id)
+    if tender is None:
+        raise HTTPException(status_code=404, detail="Tender not found")
+
+    rows = db.execute(
+        sa.select(Match, CompanyProfile)
+        .select_from(Match)
+        .join(CompanyProfile, Match.company_id == CompanyProfile.id)
+        .where(Match.tender_id == tender_id)
+        .where(Match.is_disqualified.is_(False))
+        .order_by(Match.final_score.desc())
+        .limit(max(1, top_n))
+    ).tuples().all()
+    if not rows:
+        raise HTTPException(
+            status_code=409,
+            detail="No matches for this tender yet — run the matching pipeline first.",
+        )
+
+    ranked: list[tuple[Match, CompanyProfile]] = list(rows)
+    anchor_match, anchor_company = ranked[0]
+    draft = _draft_buyer_email(tender, ranked)
+    evidence: dict[str, Any] = {
+        "recipient_type": "buyer",
+        "tender": {
+            "id": tender.id,
+            "ted_notice_id": tender.ted_notice_id,
+            "title": tender.title,
+            "buyer_name": tender.buyer_name,
+            "buyer_country": tender.buyer_country,
+            "deadline": tender.deadline.isoformat() if tender.deadline else None,
+            "budget_eur": tender.budget_eur,
+            "cpv_codes": tender.cpv_codes,
+        },
+        "recommended_suppliers": [
+            {
+                "company_id": str(company.id),
+                "name": company.name,
+                "country": company.country,
+                "website": company.website,
+                "final_score": match.final_score,
+                "explanation": match.explanation,
+            }
+            for match, company in ranked
+        ],
+    }
+
+    email = Email(
+        match_id=anchor_match.id,  # anchor to the top match (keeps match_id NOT NULL)
+        tender_id=tender.id,
+        recipient_type="buyer",
+        subject=draft["subject"],
+        body=draft["body"],
+        evidence=evidence,
+        status="draft",
+    )
+    db.add(email)
+    db.commit()
+    db.refresh(email)
+
+    return _email_out(email, tender, anchor_company)
 
 
 @router.get("/{email_id}")

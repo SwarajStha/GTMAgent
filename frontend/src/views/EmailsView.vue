@@ -163,8 +163,18 @@ function approveDraft() {
               <h2 class="mt-2 text-2xl font-black leading-tight text-slate-950">
                 {{ selectedDraft.subject }}
               </h2>
-              <p class="mt-2 text-sm font-semibold text-slate-500">
-                To {{ selectedDraft.recipient }}
+              <p class="mt-2 flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-500">
+                <span>To {{ selectedDraft.recipient }}</span>
+                <span
+                  class="badge"
+                  :class="
+                    selectedDraft.recipientType === 'buyer'
+                      ? 'bg-indigo-50 text-indigo-700'
+                      : 'bg-slate-100 text-slate-600'
+                  "
+                >
+                  {{ selectedDraft.recipientType === 'buyer' ? 'Buyer outreach' : 'Supplier outreach' }}
+                </span>
               </p>
             </div>
             <div class="flex flex-wrap gap-2">
@@ -231,6 +241,30 @@ function approveDraft() {
                 <dd class="text-sm font-black text-slate-900">{{ selectedDraft.tone }}</dd>
               </div>
             </dl>
+
+            <div
+              v-if="selectedDraft.recipientType === 'buyer' && selectedDraft.recommendedSuppliers?.length"
+              class="mt-6"
+            >
+              <p class="section-kicker">Recommended suppliers</p>
+              <ul class="mt-2 space-y-2">
+                <li
+                  v-for="supplier in selectedDraft.recommendedSuppliers"
+                  :key="supplier.name"
+                  class="rounded border border-slate-200 bg-white p-3"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-sm font-black text-slate-900">{{ supplier.name }}</span>
+                    <span class="text-sm font-black text-slate-500">
+                      {{ Math.round(supplier.finalScore * 100) }}%
+                    </span>
+                  </div>
+                  <p v-if="supplier.explanation" class="mt-1 text-xs font-semibold text-slate-500">
+                    {{ supplier.explanation }}
+                  </p>
+                </li>
+              </ul>
+            </div>
           </aside>
         </div>
       </article>

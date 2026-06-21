@@ -1,0 +1,21 @@
+# Matching-pipeline ML dependencies (Phase 3).
+#
+# Kept SEPARATE from requirements.txt on purpose: these are heavy (torch pulls
+# hundreds of MB) and only the *runtime* matching path needs them. The unit
+# tests inject fake embedders, and app.matching.embedder lazy-imports
+# sentence_transformers, so CI and the normal test run stay torch-free and fast.
+#
+# Install for real semantic matching / building company_profile embeddings:
+#   pip install -r requirements-ml.txt
+# (locally add the project's SSL workaround:
+#   --trusted-host pypi.org --trusted-host files.pythonhosted.org)
+#
+# Docker/CI note: on Linux, `torch` defaults to the CUDA build (~2 GB). For a
+# CPU-only image pin the CPU wheel, e.g.:
+#   --extra-index-url https://download.pytorch.org/whl/cpu
+# First model use downloads all-MiniLM-L6-v2 (~90 MB) via Hugging Face; the
+# embedder injects truststore so AV/proxy SSL inspection doesn't block it.
+
+scikit-learn==1.9.0
+joblib==1.5.3
+sentence-transformers==5.5.1

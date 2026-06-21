@@ -8,6 +8,16 @@ Current contents:
 |---|---|
 | `ted_smoke.py` | TED v3 ingestion smoke test (Job 1) — exercises the live API and (optionally) writes to the `tenders` table |
 | `awards_smoke.py` | TED Award (CAN) back-fill smoke test (Job 2) — exercises the live API and (optionally) writes to the `awards` + `companies` tables |
+| `agent_smoke.py` | Claude tool-use agent smoke test (Phase 6) — runs `AgentController` against a goal (dry-run by default) |
+
+> **For routine ingestion, prefer the unified CLI** over the smoke scripts:
+> `python -m app.ingestion --mode {contracts,awards,both} [--no-dossiers] [--dry-run] [--limit N]`
+> (run from `backend/`). The smoke scripts are diagnostic tools — they add a raw
+> API "peek" phase and richer per-notice logging for debugging field-mapping
+> surprises. There is no dedicated matching smoke script yet; to exercise the
+> matching pipeline end-to-end, use the copy-paste reproduction snippet in
+> [docs/matching_pipeline_smoke_record.md](../../docs/matching_pipeline_smoke_record.md)
+> or the API (`POST /api/v1/matches/run/{tender_id}`).
 
 ---
 
@@ -318,7 +328,7 @@ Both tables together so the FK doesn't trip. `tenders` is untouched.
 docker compose down -v          # wipes the pgdata volume
 docker compose up -d db
 cd backend
-alembic upgrade head            # rebuild schema at current head (0002 after Job 2)
+alembic upgrade head            # rebuild schema at current head (0008)
 ```
 
 Use when migrations get tangled (e.g. after switching branches with a different migration head).

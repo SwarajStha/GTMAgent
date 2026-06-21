@@ -15,9 +15,12 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
+from fastapi import HTTPException
+
 from app.api.v1.awards import get_award, list_awards
 from app.api.v1.companies import get_company, list_companies
-from app.api.v1.emails import get_email
+from app.api.v1.emails import generate_buyer_email, get_email
 from app.api.v1.feedback import FeedbackCreate, submit_feedback
 from app.api.v1.matches import get_match, list_matches
 from app.api.v1.tenders import get_tender, list_tenders
@@ -361,3 +364,62 @@ def test_feedback_submit_with_email_real_db(db_session) -> None:
     )
     assert out.email_id == email.id
     assert out.rating == -1
+
+
+# ---------------------------------------------------------------------------
+# Buyer-facing email (Layer 3)
+# ---------------------------------------------------------------------------
+
+
+def test_buyer_email_recommends_top_matches_real_db(db_session) -> None:
+    tender = _make_tender()
+    top = _make_company_profile(name="Top Supplier")
+    second = _make_company_profile(name="Second Supplier")
+    db_session.add_all([tender, top, second])
+    db_session.flush()
+
+    db_session.add_all([
+        _make_match(tender.id, top.id, final_score=0.92),
+        _make_match(tender.id, second.id, final_score=0.61),
+    ])
+    db_session.flush()
+
+    out = generate_buyer_email(tender.id, db=db_session, top_n=3)
+
+    assert out.recipient_type == "buyer"
+    suppliers = out.evidence["recommended_suppliers"]
+    assert [s["name"] for s in suppliers] == ["Top Supplier", "Second Supplier"]
+    assert out.company.name == "Top Supplier"  # anchored to the top match
+    assert "Top Supplier" in out.body
+    assert out.tender.ted_notice_id == tender.ted_notice_id
+
+    stored = db_session.query(Email).filter_by(tender_id=tender.id).all()
+    assert len(stored) == 1
+    assert stored[0].recipient_type == "buyer"
+
+
+def test_buyer_email_409_when_no_matches_real_db(db_session) -> None:
+    tender = _make_tender(ted_notice_id="NO-MATCH-1")
+    db_session.add(tender)
+    db_session.flush()
+
+    with pytest.raises(HTTPException) as exc_info:
+        generate_buyer_email(tender.id, db=db_session)
+    assert exc_info.value.status_code == 409
+
+
+def test_buyer_email_excludes_disqualified_real_db(db_session) -> None:
+    tender = _make_tender()
+    good = _make_company_profile(name="Eligible Co")
+    bad = _make_company_profile(name="Disqualified Co")
+    db_session.add_all([tender, good, bad])
+    db_session.flush()
+    db_session.add_all([
+        _make_match(tender.id, good.id, final_score=0.5),
+        _make_match(tender.id, bad.id, final_score=0.99, is_disqualified=True),
+    ])
+    db_session.flush()
+
+    out = generate_buyer_email(tender.id, db=db_session)
+    names = [s["name"] for s in out.evidence["recommended_suppliers"]]
+    assert names == ["Eligible Co"]  # disqualified excluded despite higher score

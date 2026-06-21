@@ -300,11 +300,18 @@ class AwardRow(BaseModel):
 
     ted_notice_id: str
     cpv_code: str | None = None
+    notice_title: str | None = None
+    description: str | None = None
+    procedure_type: str | None = None
+    nuts_code: str | None = None
     buyer_name: str | None = None
     buyer_country: str | None = None
     winner_raw_name: str
+    winner_identifier: str | None = None
+    winner_country: str | None = None
     winner_canonical_id: int | None = None
     contract_value_eur: float | None = None
+    contract_currency: str | None = None
     award_date: date | None = None
     n_offers_received: int | None = None
     raw_json: dict[str, Any]
@@ -353,8 +360,31 @@ class AwardRow(BaseModel):
             )
             return None
 
+        # Winner identity. winner-identifier is the tax/registration id — a
+        # stronger dedup key than name normalisation (CLAUDE.md §15 round 2);
+        # winner-country is alpha-3.
+        winner_identifier = _str_from(
+            _award_first(
+                raw,
+                "winner-identifier",
+                notice_id=notice_id,
+                field_label="winner_identifier",
+                warn_on_miss=False,
+            )
+        )
+        winner_country = _str_from(
+            _award_first(
+                raw,
+                "winner-country",
+                notice_id=notice_id,
+                field_label="winner_country",
+                warn_on_miss=False,
+            )
+        )
+
         # BT-720 is awarded contract value; BT-160 is the tender's
-        # original offered value (often equal, sometimes not).
+        # original offered value (often equal, sometimes not). TED does NOT
+        # convert to EUR — the value is in `contract_currency`.
         value_raw = _award_first(
             raw,
             "BT-720-Tender",
@@ -363,6 +393,16 @@ class AwardRow(BaseModel):
             field_label="contract_value_eur",
         )
         contract_value_eur = _to_float(value_raw)
+        contract_currency = _str_from(
+            _award_first(
+                raw,
+                "BT-720-Tender-Currency",
+                "BT-160-Tender-Currency",
+                notice_id=notice_id,
+                field_label="contract_currency",
+                warn_on_miss=False,
+            )
+        )
 
         # `winner-decision-date` is when the winner was chosen;
         # `BT-145-Contract` is when the contract was concluded (signed).
@@ -395,6 +435,52 @@ class AwardRow(BaseModel):
         )
         cpv_code = _str_from(cpv_val)
 
+        # ML-enrichment fields. notice-title is multilingual (original lang);
+        # procedure-type is the clean eForms code with BT-105 as fallback;
+        # nuts_code prefers place-of-performance, falls back to buyer region
+        # for full coverage (place-of-performance ~65% populated, buyer 100%).
+        notice_title = _str_from(
+            _award_first(
+                raw,
+                "notice-title",
+                "title-proc",
+                notice_id=notice_id,
+                field_label="notice_title",
+                warn_on_miss=False,
+            )
+        )
+        description = _str_from(
+            _award_first(
+                raw,
+                "description-proc",
+                "description-lot",
+                notice_id=notice_id,
+                field_label="description",
+                warn_on_miss=False,
+            )
+        )
+        procedure_type = _str_from(
+            _award_first(
+                raw,
+                "procedure-type",
+                "BT-105-Procedure",
+                notice_id=notice_id,
+                field_label="procedure_type",
+                warn_on_miss=False,
+            )
+        )
+        nuts_code = _str_from(
+            _award_first(
+                raw,
+                "place-of-performance-subdiv-proc",
+                "place-of-performance-subdiv-lot",
+                "buyer-country-sub",
+                notice_id=notice_id,
+                field_label="nuts_code",
+                warn_on_miss=False,
+            )
+        )
+
         buyer_name = _str_from(
             _award_first(
                 raw,
@@ -419,10 +505,17 @@ class AwardRow(BaseModel):
         return cls(
             ted_notice_id=notice_id,
             cpv_code=cpv_code,
+            notice_title=notice_title,
+            description=description,
+            procedure_type=procedure_type,
+            nuts_code=nuts_code,
             buyer_name=buyer_name,
             buyer_country=buyer_country,
             winner_raw_name=winner,
+            winner_identifier=winner_identifier,
+            winner_country=winner_country,
             contract_value_eur=contract_value_eur,
+            contract_currency=contract_currency,
             award_date=award_date,
             n_offers_received=n_offers_received,
             raw_json=raw,

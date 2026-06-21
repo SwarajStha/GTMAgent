@@ -62,7 +62,7 @@ class Settings(BaseSettings):
         description="User-Agent sent on every TED API request.",
     )
     ted_request_delay_ms: int = Field(
-        default=150,
+        default=1000,
         description="Sleep between paginated TED requests, in milliseconds.",
     )
     ted_request_timeout_s: int = Field(

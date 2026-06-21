@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { emailDrafts, type EmailDraft } from './sampleData'
+import { emailDrafts, type EmailDraft, type RecommendedSupplier } from './sampleData'
 
 interface ApiEmailContextTender {
   id: number
@@ -18,14 +18,23 @@ interface ApiEmailContextCompany {
   website: string | null
 }
 
+interface ApiRecommendedSupplier {
+  name: string
+  country: string | null
+  final_score: number
+  explanation: string | null
+}
+
 interface ApiEmail {
   id: string
   match_id: string
+  recipient_type: 'supplier' | 'buyer'
   subject: string
   body: string
   evidence: {
     match_explanation?: string | null
     document_snippets?: Array<{ filename: string; snippet: string }>
+    recommended_suppliers?: ApiRecommendedSupplier[]
     tender?: { title?: string | null; ted_notice_id?: string }
     company?: { website?: string | null }
   } | null
@@ -45,6 +54,11 @@ function toDraftStatus(status: string): EmailDraft['status'] {
 }
 
 function toEvidenceItems(email: ApiEmail): string[] {
+  if (email.recipient_type === 'buyer') {
+    return (email.evidence?.recommended_suppliers ?? [])
+      .map((s) => `${s.name} — fit ${Math.round(s.final_score * 100)}%`)
+      .slice(0, 4)
+  }
   const snippets =
     email.evidence?.document_snippets?.map((item) => `${item.filename}: ${item.snippet}`) ?? []
   return [
@@ -59,17 +73,32 @@ function recipientFor(company: ApiEmailContextCompany): string {
 }
 
 function toEmailDraft(email: ApiEmail): EmailDraft {
+  const isBuyer = email.recipient_type === 'buyer'
+  const recommendedSuppliers: RecommendedSupplier[] | undefined = isBuyer
+    ? (email.evidence?.recommended_suppliers ?? []).map((s) => ({
+        name: s.name,
+        country: s.country,
+        finalScore: s.final_score,
+        explanation: s.explanation,
+      }))
+    : undefined
   return {
     id: email.id,
     matchId: email.match_id,
     subject: email.subject,
-    recipient: recipientFor(email.company),
-    companyName: email.company.name,
+    recipient: isBuyer
+      ? email.tender.buyer_name ?? 'public buyer'
+      : recipientFor(email.company),
+    companyName: isBuyer
+      ? email.tender.buyer_name ?? email.tender.title ?? email.tender.ted_notice_id
+      : email.company.name,
     status: toDraftStatus(email.status),
     tone: 'consultative',
     updatedAt: email.updated_at,
     body: email.body,
     evidence: toEvidenceItems(email),
+    recipientType: email.recipient_type,
+    recommendedSuppliers,
   }
 }
 
@@ -105,6 +134,28 @@ export const useEmailsStore = defineStore('emails', {
       } catch (error) {
         this.error = error instanceof Error ? error.message : 'Email API request failed'
         this.source = 'sample'
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+    async generateBuyer(tenderId: string) {
+      this.loading = true
+      this.error = null
+      try {
+        const response = await fetch(`/api/v1/emails/buyer/${tenderId}/generate`, {
+          method: 'POST',
+        })
+        if (!response.ok) {
+          throw new Error(`Buyer email API returned ${response.status}`)
+        }
+        const body = (await response.json()) as ApiEmail
+        const draft = toEmailDraft(body)
+        this.drafts = [draft, ...this.drafts.filter((item) => item.id !== draft.id)]
+        this.source = 'api'
+        return draft
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Buyer email API request failed'
         throw error
       } finally {
         this.loading = false

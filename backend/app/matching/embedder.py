@@ -1,13 +1,14 @@
-"""sentence-transformers ensemble embedding wrapper.
+"""sentence-transformers embedding wrapper.
 
-Loads three local models on CPU and exposes a unified `embed()` that
-returns vectors from each. Downstream code can pick a single vector or
-average across models for ensemble similarity.
+MVP: a single MiniLM model (`all-MiniLM-L6-v2`, 384-d) — matching
+`company_profiles.embedding Vector(384)`. The class keeps the `EnsembleEmbedder`
+name and the `embed` / `embed_all` interface so it can grow into the locked
+three-model ensemble (mpnet 768-d, e5 1024-d) later without changing call sites.
 
-Models used:
-  - all-MiniLM-L6-v2          (fast, 384-d)
-  - all-mpnet-base-v2         (accurate, 768-d)
-  - multilingual-e5-large     (multilingual, 1024-d)
+The `SentenceTransformer` is **lazy-loaded on first use** (one-time model
+download + ~10s load), so importing this module stays cheap and does not pull
+torch at import time. Embeddings are L2-normalised, so a plain dot product
+equals cosine similarity downstream.
 """
 from __future__ import annotations
 
@@ -19,21 +20,67 @@ ModelName = Literal[
     "multilingual-e5-large",
 ]
 
+DEFAULT_MODEL: ModelName = "all-MiniLM-L6-v2"
+
+_MODEL_DIMS: dict[str, int] = {
+    "all-MiniLM-L6-v2": 384,
+    "all-mpnet-base-v2": 768,
+    "multilingual-e5-large": 1024,
+}
+
+_ssl_injected = False
+
+
+def _ensure_ssl_truststore() -> None:
+    """Route HTTPS through the OS trust store (Windows AV/proxy SSL inspection
+    otherwise breaks the one-time Hugging Face model download). Mirrors the
+    truststore decision used by `TedClient`. Idempotent; best-effort."""
+    global _ssl_injected
+    if _ssl_injected:
+        return
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception:  # truststore absent / already patched — fall back to default SSL
+        pass
+    _ssl_injected = True
+
 
 class EnsembleEmbedder:
-    """Lazily loads the three sentence-transformers models on first use."""
+    """Lazily loads sentence-transformers model(s) on first use and caches them."""
 
     def __init__(self) -> None:
         self._models: dict[str, object] = {}
 
-    # TODO: Phase 3 — lazy-load a SentenceTransformer and cache it
     def _get_model(self, name: ModelName) -> object:
-        ...
+        if name not in self._models:
+            _ensure_ssl_truststore()
+            # Imported here (not at module top) so importing this module stays
+            # cheap and torch-free until an embedding is actually requested.
+            from sentence_transformers import SentenceTransformer
 
-    # TODO: Phase 3 — encode text and return a vector for the chosen model
-    def embed(self, text: str, model: ModelName = "all-MiniLM-L6-v2") -> list[float]:
-        ...
+            self._models[name] = SentenceTransformer(name)
+        return self._models[name]
 
-    # TODO: Phase 3 — encode with every model and return a dict[name, vector]
+    def embed(self, text: str, model: ModelName = DEFAULT_MODEL) -> list[float]:
+        """Encode `text` with `model`; returns an L2-normalised vector."""
+        st_model = self._get_model(model)
+        vector = st_model.encode(
+            text or "",
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+        return [float(x) for x in vector]
+
     def embed_all(self, text: str) -> dict[str, list[float]]:
-        ...
+        """Encode with every loaded/available model.
+
+        MVP returns only the default model; add ensemble members here to fan out.
+        """
+        return {DEFAULT_MODEL: self.embed(text, DEFAULT_MODEL)}
+
+    @staticmethod
+    def dim(model: ModelName = DEFAULT_MODEL) -> int:
+        return _MODEL_DIMS[model]

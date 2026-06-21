@@ -81,6 +81,44 @@ def test_qualification_company_has_nothing() -> None:
     assert score_qualification(["45000000"], []) == 0.0
 
 
+# ── qualification: CPV-prefix partial credit (the smoke-record fix) ──────────
+
+
+def test_qualification_cpv_group_prefix_partial_credit() -> None:
+    # 45215130 vs 45215140 share the 5-digit category 45215 -> 0.8 (not 0).
+    assert score_qualification(["45215130"], ["45215140"]) == 0.8
+
+
+def test_qualification_cpv_division_only_partial_credit() -> None:
+    # The exact smoke case: 45215130 vs 45432200 share only the 45 division.
+    assert score_qualification(["45215130"], ["45432200"]) == 0.3
+
+
+def test_qualification_cpv_no_overlap_is_zero() -> None:
+    # Construction (45) vs IT (72) share nothing.
+    assert score_qualification(["45215130"], ["72000000"]) == 0.0
+
+
+def test_qualification_cpv_check_digit_suffix_is_normalised() -> None:
+    # A trailing -check digit is stripped; still an exact 8-digit match.
+    assert score_qualification(["45000000-7"], ["45000000"]) == 1.0
+
+
+def test_qualification_mixes_cpv_and_keyword_terms() -> None:
+    # One CPV at division level (0.3) + one covered keyword (1.0) -> mean 0.65.
+    assert score_qualification(
+        ["45215130", "parquet flooring"],
+        ["45432200", "specialist parquet contractor"],
+    ) == 0.65
+
+
+def test_qualification_free_text_number_is_not_a_cpv() -> None:
+    # "Construction of 45 houses" has letters -> keyword, not a CPV code.
+    assert score_qualification(
+        ["Construction of 45 houses"], ["general construction works"]
+    ) == 1.0
+
+
 # ── RuleScorer wrapper ────────────────────────────────────────────────────
 
 

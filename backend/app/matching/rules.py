@@ -17,6 +17,7 @@ written by the supplier-pool builder (Layer 1), shaped as::
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Neutral fill for a dimension we cannot evaluate (missing data on either side).
@@ -25,9 +26,37 @@ MISSING_FILL = 0.5
 # The penalty score for a company outside the tender's region (ML-spike value).
 OUT_OF_REGION = 0.2
 
+# CPV-prefix partial-credit ladder (finest first). CPV codes are hierarchical
+# (division=2, group=3, class=4, category=5, then detail up to 8 digits), so two
+# codes that share only the leading digits are still related work. An exact
+# 8-digit hit scores 1.0; sharing the 45-division ("construction") scores 0.3.
+# This replaces exact-only CPV matching, which scored qualification=0 for every
+# match in the live smoke (tender/award CPVs rarely match to all 8 digits).
+_CPV_LEVELS: tuple[tuple[int, float], ...] = ((8, 1.0), (5, 0.8), (4, 0.6), (3, 0.4), (2, 0.3))
+
 
 def _clip01(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def _cpv_digits(term: str) -> str:
+    """Return a normalised 8-digit CPV string if `term` looks like a CPV code,
+    else ``""``. A CPV is all-numeric (a trailing ``-check`` digit / dots /
+    spaces allowed) with at least 6 digits — so free-text like ``"parquet
+    flooring"`` or ``"Construction of 45 houses"`` is NOT treated as a CPV."""
+    raw = str(term).strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) >= 6 and re.fullmatch(r"[\d\s.\-]+", raw):
+        return digits[:8].ljust(8, "0")
+    return ""
+
+
+def _cpv_prefix_credit(tender_cpv: str, company_cpvs: list[str]) -> float:
+    """Best partial-credit match of one tender CPV against the company's CPVs."""
+    for level, credit in _CPV_LEVELS:
+        if any(tender_cpv[:level] == c[:level] for c in company_cpvs):
+            return credit
+    return 0.0
 
 
 def score_budget(
@@ -79,26 +108,47 @@ def score_qualification(
     tender_terms: list[str] | None,
     company_terms: list[str] | None,
 ) -> float:
-    """Fraction of the tender's required terms (CPV codes / capability keywords)
-    the company can cover.
+    """Average coverage of the tender's required terms by the company.
 
-    A term counts as covered if it appears (as a substring) in the company's
-    combined capability text, or shares a whole-word token with it. No tender
-    requirements -> 1.0 (nothing to fail against).
+    Each required term is classified and scored independently, then averaged:
+
+    * **CPV codes** get hierarchical partial credit against the company's CPV
+      codes (8-digit exact = 1.0 down to shared 2-digit division = 0.3) — see
+      ``_CPV_LEVELS``. This is the fix for the live-smoke ``qualification=0``
+      finding: construction tenders/awards share the ``45`` division but rarely
+      an exact 8-digit code.
+    * **Free-text keywords** get binary coverage: 1.0 if the phrase is a
+      substring of, or shares a whole-word token with, the company's combined
+      capability text; else 0.0.
+
+    No tender requirements -> 1.0 (nothing to fail against).
     """
-    required = [str(t).strip().lower() for t in (tender_terms or []) if str(t).strip()]
+    required = [str(t).strip() for t in (tender_terms or []) if str(t).strip()]
     if not required:
         return 1.0
-    held_text = " ".join(str(t).strip().lower() for t in (company_terms or []) if str(t).strip())
-    if not held_text:
-        return 0.0
-    held_tokens = set(held_text.split())
-    matched = 0
-    for term in required:
-        term_tokens = set(term.split())
-        if term in held_text or (term_tokens & held_tokens):
-            matched += 1
-    return round(matched / len(required), 4)
+
+    # Split tender requirements into CPV codes vs free-text keywords.
+    tender_cpvs = [d for d in (_cpv_digits(t) for t in required) if d]
+    tender_keywords = [t for t in required if not _cpv_digits(t)]
+
+    # Company side: structured CPV codes (matched by prefix) and a free-text blob
+    # (matched by keyword overlap). CPV codes arrive as their own list items;
+    # the capability text arrives as a single non-numeric item.
+    held = [str(t).strip() for t in (company_terms or []) if str(t).strip()]
+    company_cpvs = [d for d in (_cpv_digits(t) for t in held) if d]
+    company_text = " ".join(t.lower() for t in held if not _cpv_digits(t))
+    held_tokens = set(company_text.split())
+
+    credits: list[float] = []
+    for tc in tender_cpvs:
+        credits.append(_cpv_prefix_credit(tc, company_cpvs) if company_cpvs else 0.0)
+    for kw in tender_keywords:
+        kw_lower = kw.lower()
+        kw_tokens = set(kw_lower.split())
+        covered = bool(company_text) and (kw_lower in company_text or bool(kw_tokens & held_tokens))
+        credits.append(1.0 if covered else 0.0)
+
+    return round(sum(credits) / len(credits), 4) if credits else 1.0
 
 
 class RuleScorer:

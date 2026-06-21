@@ -13,9 +13,15 @@
 # Docker/CI note: on Linux, `torch` defaults to the CUDA build (~2 GB). For a
 # CPU-only image pin the CPU wheel, e.g.:
 #   --extra-index-url https://download.pytorch.org/whl/cpu
-# First model use downloads all-MiniLM-L6-v2 (~90 MB) via Hugging Face; the
-# embedder injects truststore so AV/proxy SSL inspection doesn't block it.
+# First model use downloads paraphrase-multilingual-MiniLM-L12-v2 (~470 MB) via
+# Hugging Face; the embedder injects truststore so AV/proxy SSL inspection
+# doesn't block it.
 
 scikit-learn==1.9.0
 joblib==1.5.3
 sentence-transformers==5.5.1
+# Fuzzy company-name matching used by the offline v5 training/eval pipeline
+# (exports_ml_pipeline.py) and the in-app winner-resolution port. If pip cannot
+# resolve this exact version locally, bump to the latest 3.x — the fuzz API is
+# stable across 3.x.
+rapidfuzz==3.10.1

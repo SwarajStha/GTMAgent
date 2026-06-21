@@ -1,28 +1,39 @@
 """sentence-transformers embedding wrapper.
 
-MVP: a single MiniLM model (`all-MiniLM-L6-v2`, 384-d) — matching
-`company_profiles.embedding Vector(384)`. The class keeps the `EnsembleEmbedder`
-name and the `embed` / `embed_all` interface so it can grow into the locked
-three-model ensemble (mpnet 768-d, e5 1024-d) later without changing call sites.
+Default model: `paraphrase-multilingual-MiniLM-L12-v2` (384-d) — matching
+`company_profiles.embedding Vector(384)`. Multilingual on purpose: the TED
+corpus (tender titles/descriptions, award histories) spans many EU languages,
+and the English-only `all-MiniLM-L6-v2` under-scored non-English text. The
+English model (also 384-d) is kept as a selectable alternative. The class keeps
+the `EnsembleEmbedder` name and the `embed` / `embed_all` interface so it can
+grow into the locked three-model ensemble (mpnet 768-d, e5 1024-d) later without
+changing call sites.
 
 The `SentenceTransformer` is **lazy-loaded on first use** (one-time model
 download + ~10s load), so importing this module stays cheap and does not pull
 torch at import time. Embeddings are L2-normalised, so a plain dot product
 equals cosine similarity downstream.
+
+NOTE: changing the default model invalidates any `company_profiles.embedding`
+written by a different model — vectors from different models are NOT comparable,
+so a tender embedded with the new model would score garbage against
+old-model company vectors. Re-run `build_company_profiles` after switching.
 """
 from __future__ import annotations
 
 from typing import Literal
 
 ModelName = Literal[
+    "paraphrase-multilingual-MiniLM-L12-v2",
     "all-MiniLM-L6-v2",
     "all-mpnet-base-v2",
     "multilingual-e5-large",
 ]
 
-DEFAULT_MODEL: ModelName = "all-MiniLM-L6-v2"
+DEFAULT_MODEL: ModelName = "paraphrase-multilingual-MiniLM-L12-v2"
 
 _MODEL_DIMS: dict[str, int] = {
+    "paraphrase-multilingual-MiniLM-L12-v2": 384,
     "all-MiniLM-L6-v2": 384,
     "all-mpnet-base-v2": 768,
     "multilingual-e5-large": 1024,

@@ -33,7 +33,13 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   title+description (semantic 0.24→0.67–0.82 on relevant matches; P(win)
   0.27→0.79); budgets EUR-normalised via `money.to_eur` (1.353 B CZK → €54 M).
   216/216 tests; no migration / no v5 re-run (both align the app to the existing
-  model). Activated via a full profile re-embed. **Next: G10** (Claude emails).
+  model). Activated via a full profile re-embed.
+- **2026-06-21 — G10 done (offline-verified).** `EmailDrafter` is the single
+  Claude-or-template drafting path; `EvidenceExtractor` centralises evidence; the
+  `/emails` endpoints (supplier + buyer) and the agent `draft_email` tool all
+  route through it. 227/227 tests (Claude path via fake client; suite forced
+  offline). Live Claude smoke offered, not yet run. **Next: G9/G13** (scheduler +
+  reflection wiring) or the frontend (G15/G16).
 
 ---
 
@@ -77,6 +83,7 @@ Everything else is downstream of that.
 | R20 | Feedback captured but unused / LR retraining (G8) | Step 5 | `FeedbackRetrainer` + `POST /feedback/retrain` + durable `feedback.features` (mig `0010`) |
 | R21 | Thin semantic text (G6) | 2026-06-21 | capability text = award title+description; semantic 0.24→0.67–0.82 (live) |
 | R22 | Budget unnormalised/sentinels (G7) | 2026-06-21 | `money.to_eur` EUR conversion + sentinel drop; CZK 1.353 B → €54 M (live) |
+| R23 | Three divergent email drafters / Claude stub (G10) | 2026-06-21 | real `EmailDrafter` (Claude+fallback) + `EvidenceExtractor`; endpoint/buyer/agent unified |
 
 ---
 
@@ -177,14 +184,22 @@ after G8 + the scheduler (G13). **Refs:** agent review (remaining) #3.
 
 ### Priority 4 — Email generation (Phase 4)
 
-#### G10 🟠 Make `EmailDrafter` real and unify three drafting paths
-Three drafters exist and don't agree: deterministic endpoint templates
-(`_draft_from_evidence` / `_draft_buyer_email`, real), `generation/drafter.py`
-(Claude, stub), and the agent's `draft_email` tool (calls the stub → errors).
-Make `EmailDrafter` the real Claude implementation (model `claude-sonnet-4-6`,
-evidence-grounded), route the endpoint + agent tool + deterministic fallback
-through it. **Files:** `app/generation/{drafter,evidence,validator}.py`,
-`api/v1/emails.py`, `agent/tools.py`. **Refs:** backend-API #3, agent #1.
+#### G10 ✅ Real `EmailDrafter` + unified drafting paths — DONE (2026-06-21)
+`EmailDrafter.draft(evidence, recipient_type)` is now the single drafting path:
+Claude (`claude-sonnet-4-6` via `settings.anthropic_model`, evidence-constrained
+system prompt, stable `messages.create` surface for SDK 0.39.0) with a
+deterministic template fallback on missing key / SDK error / a draft that fails
+`EmailValidator`. `EvidenceExtractor` centralises the evidence dict; the supplier
+endpoint, buyer digest, and the agent `draft_email` tool all route through the
+drafter (agent tool now fetches real evidence by `match_id` instead of a mock).
+`EmailValidator` is a structural guardrail. Returns a `generator` field
+(`claude`|`template`) recorded in `evidence.draft_generator`. Tests stay offline
+via an autouse `_llm_available→False` fixture; the Claude path is covered with an
+injected fake client. 227/227 backend tests, ruff clean. **Live-verified
+2026-06-21:** with a valid key, Claude generated an evidence-grounded email for a
+German tender (auto-matched language; cited only real TED number / CPV codes /
+deadline). The fallback path was also exercised live (a 401 on a bad key fell
+back to the template cleanly). **Refs:** backend-API #3, agent #1.
 
 ### Priority 5 — Pipeline completeness
 

@@ -38,6 +38,10 @@ class Settings(BaseSettings):
         ),
     )
     anthropic_api_key: str = Field(default="")
+    anthropic_model: str = Field(
+        default="claude-sonnet-4-6",
+        description="Claude model id for the email drafter / agent (locked stack).",
+    )
     tavily_api_key: str = Field(default="")
     allowed_cpv_codes: str = Field(
         default="45000000-7,72000000-5,09330000-1",

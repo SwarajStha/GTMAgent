@@ -45,6 +45,18 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _offline_email_drafter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the LLM email drafter offline across the whole suite, even when a real
+    ANTHROPIC_API_KEY is present in `.env` — forces the deterministic fallback
+    path. Tests that exercise the Claude path inject a fake client into
+    `EmailDrafter`, which bypasses this gate (the gate only applies when no client
+    was supplied)."""
+    import app.generation.drafter as drafter
+
+    monkeypatch.setattr(drafter, "_llm_available", lambda: False)
+
+
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     """Create + drop the schema on the test database once per session."""

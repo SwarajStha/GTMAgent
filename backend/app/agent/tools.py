@@ -234,12 +234,17 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
     elif tool_name == "draft_email":
         try:
             from app.generation.drafter import EmailDrafter
+            from app.generation.evidence import EvidenceExtractor
+
             match_id = tool_args["match_id"]
-            # To draft properly, we should fetch evidence for the match_id from DB,
-            # for now passing a mock or letting drafter handle it.
-            drafter = EmailDrafter()
-            result = drafter.draft(evidence={"match_id": match_id, "notes": "evidence goes here"})
-            return f"Email generated successfully: {result}"
+            evidence = EvidenceExtractor().collect(session, match_id)
+            if evidence is None:
+                return f"No match found for id {match_id}."
+            draft = EmailDrafter().draft(evidence, recipient_type="supplier")
+            return (
+                f"Drafted supplier email ({draft['generator']}).\n"
+                f"Subject: {draft['subject']}\n\n{draft['body']}"
+            )
         except Exception as e:
             return f"Error drafting email: {str(e)}"
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,11 +13,17 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_db
 from app.api.v1.feedback import FeedbackCreate, submit_feedback
 from app.main import app
+from app.matching.features import FEATURE_NAMES
 
 MATCH_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 OTHER_MATCH_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 EMAIL_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 FEEDBACK_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
+
+
+def _match() -> SimpleNamespace:
+    """A legacy match (feature columns unset → no snapshot) for the mock path."""
+    return SimpleNamespace(**{name: None for name in FEATURE_NAMES})
 
 
 def _assign_feedback_defaults(feedback: object) -> None:
@@ -27,7 +34,7 @@ def _assign_feedback_defaults(feedback: object) -> None:
 
 def test_submit_feedback_creates_match_feedback() -> None:
     db = MagicMock()
-    db.scalar.return_value = True
+    db.get.return_value = _match()
     db.refresh.side_effect = _assign_feedback_defaults
     payload = FeedbackCreate(match_id=MATCH_ID, rating=1, comment="Good fit")
 
@@ -44,7 +51,7 @@ def test_submit_feedback_creates_match_feedback() -> None:
 
 def test_submit_feedback_endpoint_returns_json() -> None:
     db = MagicMock()
-    db.scalar.return_value = True
+    db.get.return_value = _match()
     db.refresh.side_effect = _assign_feedback_defaults
     app.dependency_overrides[get_db] = lambda: db
 
@@ -65,7 +72,8 @@ def test_submit_feedback_endpoint_returns_json() -> None:
 
 def test_submit_feedback_accepts_email_for_same_match() -> None:
     db = MagicMock()
-    db.scalar.side_effect = [True, MATCH_ID]
+    db.get.return_value = _match()
+    db.scalar.return_value = MATCH_ID  # email's match_id
     db.refresh.side_effect = _assign_feedback_defaults
     payload = FeedbackCreate(match_id=MATCH_ID, email_id=EMAIL_ID, rating=1)
 
@@ -76,7 +84,7 @@ def test_submit_feedback_accepts_email_for_same_match() -> None:
 
 def test_submit_feedback_raises_404_when_match_missing() -> None:
     db = MagicMock()
-    db.scalar.return_value = False
+    db.get.return_value = None
     payload = FeedbackCreate(match_id=MATCH_ID, rating=1)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -87,7 +95,8 @@ def test_submit_feedback_raises_404_when_match_missing() -> None:
 
 def test_submit_feedback_raises_404_when_email_missing() -> None:
     db = MagicMock()
-    db.scalar.side_effect = [True, None]
+    db.get.return_value = _match()
+    db.scalar.return_value = None  # email not found
     payload = FeedbackCreate(match_id=MATCH_ID, email_id=EMAIL_ID, rating=1)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -98,7 +107,8 @@ def test_submit_feedback_raises_404_when_email_missing() -> None:
 
 def test_submit_feedback_rejects_email_for_other_match() -> None:
     db = MagicMock()
-    db.scalar.side_effect = [True, OTHER_MATCH_ID]
+    db.get.return_value = _match()
+    db.scalar.return_value = OTHER_MATCH_ID  # email belongs to a different match
     payload = FeedbackCreate(match_id=MATCH_ID, email_id=EMAIL_ID, rating=1)
 
     with pytest.raises(HTTPException) as exc_info:

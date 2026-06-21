@@ -81,8 +81,8 @@ class Tender(Base):
         default=datetime.utcnow,
     )
 
-    documents: Mapped[list["Document"]] = relationship(back_populates="tender")
-    matches: Mapped[list["Match"]] = relationship(back_populates="tender")
+    documents: Mapped[list[Document]] = relationship(back_populates="tender")
+    matches: Mapped[list[Match]] = relationship(back_populates="tender")
 
 
 class Company(Base):
@@ -218,7 +218,7 @@ class CompanyProfile(Base, TimestampMixin):
         Integer, ForeignKey("companies.id"), unique=True, index=True, nullable=True
     )
 
-    matches: Mapped[list["Match"]] = relationship(back_populates="company")
+    matches: Mapped[list[Match]] = relationship(back_populates="company")
 
 
 class Match(Base, TimestampMixin):
@@ -259,7 +259,7 @@ class Match(Base, TimestampMixin):
 
     tender: Mapped[Tender] = relationship(back_populates="matches")
     company: Mapped[CompanyProfile] = relationship(back_populates="matches")
-    emails: Mapped[list["Email"]] = relationship(back_populates="match")
+    emails: Mapped[list[Email]] = relationship(back_populates="match")
 
 
 class Email(Base, TimestampMixin):
@@ -294,14 +294,22 @@ class Feedback(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    match_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("matches.id"), nullable=False, index=True
+    # Nullable + ON DELETE SET NULL so re-matching a tender (which deletes its
+    # matches) preserves the feedback row as a durable training sample instead of
+    # FK-crashing or being cascade-deleted. The `features` snapshot below keeps
+    # the row usable for retraining even after its match is gone.
+    match_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("matches.id", ondelete="SET NULL"),
+        nullable=True, index=True,
     )
     email_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("emails.id"), nullable=True
     )
     rating: Mapped[int] = mapped_column(SMALLINT, nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Snapshot of the match's 10 v5 features at feedback time (NULL for feedback
+    # on legacy/disqualified matches). The retrainer fits on (features, rating).
+    features: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Embedding(Base, TimestampMixin):

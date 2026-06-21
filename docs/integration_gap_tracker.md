@@ -24,6 +24,11 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   contract; G26 (re-match FK) fixed and live-verified. 201/201 backend tests.
   Remaining for the matcher: **G6** (thin semantic text) and **G7** (budget
   missing/unnormalised) are the visible accuracy ceilings now.
+- **2026-06-21 — Step 5 done.** Feedback → LR retraining loop: **G8 resolved.**
+  `feedback.features` snapshot (migration `0010`) + `match_id` SET NULL make
+  feedback durable across re-matches; `FeedbackRetrainer` + `POST
+  /feedback/retrain` write `model_params_feedback.json`, served in preference to
+  the v5 base. 208/208 backend tests. Activate with `alembic upgrade head`.
 
 ---
 
@@ -139,12 +144,18 @@ pushed `budget_score` to ~1.0. Fix: convert to EUR via an FX table (v5's
 
 ### Priority 3 — Feedback loop / self-improvement (Phase 5)
 
-#### G8 🟠 `lr_weights.py` retraining is a stub
-Feedback is captured (`POST /feedback`) and `matches.weights` snapshots the
-weights used, but nothing retrains. v5 already shows *how* to fit the LR on
-labelled data; wire `lr_weights.py` to load `feedback` rows + the stored feature
-vectors and refit, then feed the new weights back into `pipeline`. **Refs:** PR
-#10 review #2, backend-API #6, agent #3.
+#### G8 ✅ `lr_weights.py` retraining — DONE (Step 5)
+`FeedbackRetrainer` fits an LR on `(feedback.features, rating)` pairs and writes
+`model_params_feedback.json`, which `LogisticRegressionScorer.load_active()`
+serves in preference to the v5 base (delete the file to revert). Feedback is made
+durable across re-matches: `feedback.features` snapshots the match's 10-feature
+vector at submit time (migration `0010`), and `feedback.match_id` → nullable +
+`ON DELETE SET NULL` (same fix class as G26). Endpoint: `POST /feedback/retrain?
+min_samples=N` (guarded: needs ≥N rows and both classes, else keeps the base
+model). **Refs:** PR #10 review #2, backend-API #6, agent #3.
+**Caveat:** the feedback model is feedback-only (not blended with the v5 base),
+so it's illustrative until enough ratings accumulate — raise `min_samples` or
+delete the file to fall back to v5. Blending v5 + feedback is a future option.
 
 #### G9 🟡 Reflection loop is built but not wired to behavior
 `reflector.py` narrates recent runs/feedback but nothing reads its output back

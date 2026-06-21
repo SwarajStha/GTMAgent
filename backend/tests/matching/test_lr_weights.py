@@ -88,3 +88,37 @@ def test_from_json_roundtrip(tmp_path) -> None:
     assert scorer.feature_names == FEATURE_NAMES
     assert 0.0 <= scorer.score(_flat_features(0.5)) <= 1.0
     assert set(scorer.contributions(_flat_features(0.5))) == set(FEATURE_NAMES)
+
+
+def _write_params(path, intercept: float) -> None:
+    path.write_text(json.dumps({
+        "feature_names": FEATURE_NAMES,
+        "coefficients": [0.0] * len(FEATURE_NAMES),
+        "intercept": intercept,
+        "scaler_mean": [0.0] * len(FEATURE_NAMES),
+        "scaler_scale": [1.0] * len(FEATURE_NAMES),
+    }), encoding="utf-8")
+
+
+def test_load_active_prefers_feedback_then_base_then_none(tmp_path, monkeypatch) -> None:
+    import app.matching.lr_weights as lw
+
+    base = tmp_path / "model_params.json"
+    feedback = tmp_path / "model_params_feedback.json"
+    monkeypatch.setattr(lw, "DEFAULT_PARAMS_PATH", base)
+    monkeypatch.setattr(lw, "FEEDBACK_PARAMS_PATH", feedback)
+
+    # neither present → None
+    assert lw.LogisticRegressionScorer.load_active() is None
+
+    # base only → base
+    _write_params(base, intercept=1.0)
+    assert lw.LogisticRegressionScorer.load_active().intercept == 1.0
+
+    # feedback present → preferred over base
+    _write_params(feedback, intercept=2.0)
+    assert lw.LogisticRegressionScorer.load_active().intercept == 2.0
+
+    # remove feedback → falls back to base (revert behaviour)
+    feedback.unlink()
+    assert lw.LogisticRegressionScorer.load_active().intercept == 1.0

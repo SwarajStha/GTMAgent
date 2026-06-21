@@ -10,14 +10,24 @@ from datetime import datetime
 from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.db.models import Email, Feedback, Match
+from app.matching.features import FEATURE_NAMES
 
 router = APIRouter()
+
+
+def _match_features(match: Match) -> dict[str, float] | None:
+    """Snapshot the match's 10 v5 features, or None if any is unset (a legacy
+    fixed-weight or disqualified match — not usable as a training sample)."""
+    values = {name: getattr(match, name, None) for name in FEATURE_NAMES}
+    if any(v is None for v in values.values()):
+        return None
+    return {name: float(v) for name, v in values.items()}
 
 
 class FeedbackCreate(BaseModel):
@@ -62,8 +72,8 @@ def submit_feedback(
     if payload.rating == 0:
         raise HTTPException(status_code=422, detail="Rating must be 1 or -1")
 
-    match_exists = db.scalar(sa.select(sa.exists().where(Match.id == payload.match_id)))
-    if not match_exists:
+    match = db.get(Match, payload.match_id)
+    if match is None:
         raise HTTPException(status_code=404, detail="Match not found")
 
     if payload.email_id is not None:
@@ -83,9 +93,40 @@ def submit_feedback(
         email_id=payload.email_id,
         rating=payload.rating,
         comment=payload.comment,
+        features=_match_features(match),  # durable training snapshot (Step 5)
     )
     db.add(feedback)
     db.commit()
     db.refresh(feedback)
 
     return _feedback_out(feedback)
+
+
+class RetrainResultOut(BaseModel):
+    """Outcome of a feedback-driven LR retraining run."""
+
+    status: str  # "retrained" | "insufficient"
+    n_samples: int
+    n_pos: int
+    n_neg: int
+    min_required: int | None = None
+    out_path: str | None = None
+    coefficients: dict[str, float] | None = None
+
+
+@router.post("/retrain")
+def retrain_weights(
+    db: Annotated[Session, Depends(get_db)],
+    min_samples: Annotated[int, Query(ge=2, le=10_000)] = 10,
+) -> RetrainResultOut:
+    """Retrain the matcher's LR weights from collected feedback (G8).
+
+    On success writes `exports/model_params_feedback.json`, which the matching
+    pipeline then serves in preference to the v5 base model (delete that file to
+    revert). Refuses with ``status="insufficient"`` until enough feedback (both
+    thumbs-up and thumbs-down) has accumulated.
+    """
+    from app.matching.lr_weights import FeedbackRetrainer
+
+    result = FeedbackRetrainer(min_samples=min_samples).retrain(db)
+    return RetrainResultOut(**result)

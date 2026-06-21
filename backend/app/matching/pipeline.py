@@ -62,8 +62,9 @@ class MatchingPipeline:
         self.rules = RuleScorer()
         self.disqualifier = Disqualifier()
         self.weights = weights or dict(DEFAULT_WEIGHTS)
-        # Load the trained LR once; None → legacy fixed-weight mode.
-        self.lr_scorer = lr_scorer or (LogisticRegressionScorer.from_json() if use_lr else None)
+        # Load the active trained LR once (feedback-tuned model if present, else
+        # the v5 base); None → legacy fixed-weight mode.
+        self.lr_scorer = lr_scorer or (LogisticRegressionScorer.load_active() if use_lr else None)
 
     # ── tender helpers ───────────────────────────────────────────────────────
 

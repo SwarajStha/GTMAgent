@@ -87,7 +87,7 @@ decisions:
   with a whole-word write-verb blocklist (`\binsert\b`, `\bcreate\b`, …). The
   `\b` boundaries are deliberate so legitimate columns like `created_at` /
   `updated_at` / `comment` aren't rejected (the original substring guard blocked
-  them — see [branch_review_agent_controller.md](branch_review_agent_controller.md)).
+  them — see [integration_gap_tracker.md](integration_gap_tracker.md) R6).
 
 ### REST API + frontend integration
 All seven v1 routers are implemented (tenders, awards, companies, matches,

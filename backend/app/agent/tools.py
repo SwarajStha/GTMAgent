@@ -112,7 +112,7 @@ AGENT_TOOLS = [
 # `updated_at`, or a `comment` column are NOT rejected. The previous guard used
 # a plain substring check, which blocked every timestamp column on the PR #7
 # tables (e.g. `SELECT created_at FROM tenders` tripped the `"create"` token).
-# See docs/branch_review_agent_controller.md (query_db gap).
+# See docs/integration_gap_tracker.md (R6).
 _FORBIDDEN_SQL_KEYWORDS = re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|create)\b",
     re.IGNORECASE,
@@ -193,7 +193,7 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
         try:
             # The back-fill is month-granular — the tool schema asks the
             # model for months directly so "look back 1 day" can't silently
-            # turn into a 1-month live pull (see docs/branch_review_agent_controller.md).
+            # turn into a 1-month live pull (see docs/integration_gap_tracker.md R8).
             months = max(1, int(tool_args.get("months_back", 1)))
             settings = get_settings()
             summary = backfill_awards(

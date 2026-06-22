@@ -5,12 +5,34 @@ a `/health` endpoint used by Docker, CI, and uptime checks.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import agent, awards, companies, emails, feedback, matches, tenders
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start the in-process ingestion/reflection scheduler (Job 4 / G13).
+
+    Opt-in: `IngestionScheduler.start()` is a no-op unless `scheduler_enabled` is
+    set, so this is inert in CI/tests/dev. Stored on `app.state.scheduler` (None
+    when not started) and shut down cleanly on app exit.
+    """
+    from app.ingestion.scheduler import IngestionScheduler
+
+    scheduler = IngestionScheduler()
+    started = scheduler.start()
+    app.state.scheduler = scheduler if started else None
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -22,6 +44,7 @@ def create_app() -> FastAPI:
         title="GTM Agent API",
         version="0.1.0",
         description="B2B lead-generation pipeline for the construction-tech sector.",
+        lifespan=lifespan,
     )
 
     app.add_middleware(

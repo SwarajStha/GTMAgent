@@ -78,6 +78,51 @@ class Settings(BaseSettings):
         description="How many months back to search for TED award notices during back-fill.",
     )
 
+    # ── Scheduler (Job 4 / G13) ───────────────────────────────────────────────
+    # The in-process APScheduler loop is OPT-IN. Default False so CI, tests, and a
+    # normal dev/API boot never start polling live TED. Enable in production by
+    # setting SCHEDULER_ENABLED=true.
+    scheduler_enabled: bool = Field(
+        default=False,
+        description="Start the in-process ingestion/reflection scheduler on app boot.",
+    )
+    scheduler_contracts_cron: str = Field(
+        default="0 3 * * *",
+        description="Cron (UTC) for the daily TED contract-notice poll.",
+    )
+    scheduler_contracts_lookback_days: int = Field(
+        default=1,
+        description="Day window passed to poll_contract_notices on each scheduled run.",
+    )
+    scheduler_dossiers_enabled: bool = Field(
+        default=True,
+        description="Whether the scheduler runs the dossier-download sweep job.",
+    )
+    scheduler_dossiers_cron: str = Field(
+        default="30 3 * * *",
+        description="Cron (UTC) for the dossier-download sweep (after the contract poll).",
+    )
+    scheduler_awards_cron: str = Field(
+        default="0 4 * * 1",
+        description="Cron (UTC) for the weekly award-notice back-fill.",
+    )
+    scheduler_awards_lookback_months: int = Field(
+        default=1,
+        description="Month window for the scheduled award back-fill (catch-up, not the full 24mo).",
+    )
+    scheduler_reflection_enabled: bool = Field(
+        default=True,
+        description="Whether the scheduler runs the daily reflection cycle (G9).",
+    )
+    scheduler_reflection_cron: str = Field(
+        default="0 5 * * *",
+        description="Cron (UTC) for the daily reflection cycle.",
+    )
+    scheduler_reflection_min_samples: int = Field(
+        default=10,
+        description="Min labelled feedback rows before the reflection cycle retrains the LR.",
+    )
+
     @property
     def cpv_code_list(self) -> list[str]:
         return [c.strip() for c in self.allowed_cpv_codes.split(",") if c.strip()]

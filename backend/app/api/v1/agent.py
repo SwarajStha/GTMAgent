@@ -62,3 +62,29 @@ def run_agent(request: AgentRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent execution failed: {str(e)}")
+
+
+class ReflectResponse(BaseModel):
+    id: str
+    metrics: dict[str, Any]
+    actions: dict[str, Any]
+    narrative: str
+
+
+@router.post("/reflect", response_model=ReflectResponse)
+def run_reflection(act: bool = True):
+    """Run one reflection cycle (G9): compute operational metrics, optionally
+    retrain the matching LR from accumulated feedback (the weights lever), and
+    persist a `reflections` row.
+
+    `act=true` (default) actuates the feedback-driven retrain; `act=false` only
+    observes + narrates. Needs no ANTHROPIC_API_KEY — falls back to a
+    deterministic narrative when none is configured.
+    """
+    from app.agent.reflector import Reflector
+
+    try:
+        result = Reflector().reflect(act=act)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Reflection failed: {str(e)}")
+    return ReflectResponse(**result)

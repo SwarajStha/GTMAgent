@@ -334,3 +334,26 @@ class AgentRun(Base, TimestampMixin):
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     steps: Mapped[list | dict | None] = mapped_column(JSONB, nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Reflection(Base, TimestampMixin):
+    """One row per reflection cycle (`Reflector.reflect`, migration 0011 / G9).
+
+    This is the "wired to behaviour" record:
+      * `metrics`   — what the cycle observed (feedback stats, run counts, and the
+                      deterministic per-CPV advisory recommendation).
+      * `actions`   — what it actually did, e.g. the feedback-driven LR retrain
+                      outcome (which mutates the served model) + the narrative
+                      source. CPV recommendations are advisory only (decision B):
+                      the cycle does NOT auto-mutate `allowed_cpv_codes`.
+      * `narrative` — human-readable summary (Claude when a key is configured,
+                      deterministic otherwise).
+    """
+    __tablename__ = "reflections"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    actions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    narrative: Mapped[str | None] = mapped_column(Text, nullable=True)

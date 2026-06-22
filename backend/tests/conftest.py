@@ -57,6 +57,17 @@ def _offline_email_drafter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(drafter, "_llm_available", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _offline_reflector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the reflection-loop narrative offline across the suite (deterministic
+    path), even with a real ANTHROPIC_API_KEY in `.env`. Tests that exercise the
+    Claude narrative inject a fake client into `Reflector`, which bypasses this
+    gate (the gate only applies when no client was supplied)."""
+    import app.agent.reflector as reflector
+
+    monkeypatch.setattr(reflector, "_llm_available", lambda: False)
+
+
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     """Create + drop the schema on the test database once per session."""

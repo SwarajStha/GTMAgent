@@ -1,0 +1,28 @@
+Snapshot profile:
+
+budget present: 40% · deadline present: 89% · document_url: 100%
+Top countries: DEU 990, FRA 339, POL 313, CZE 140, ESP 112, CHE 99…
+Top CPV divisions: 45 (construction) 6822, 72 (IT) 1386, 71 (engineering) 564, 48 (software) 414, 44 (materials) 226…
+Exported: exports/tenders_snapshot_2026-06-22.csv (1.1 MB, 2996 rows).
+
+Column guide:
+
+Column	            Meaning / caveat
+id	                Integer PK (our internal id)
+ted_notice_id	    TED publication number — the natural key, e.g. 428131-2026
+title	            Notice title (original language; multilingual)
+buyer_name	        Contracting authority
+buyer_country	    Alpha-3 ISO (e.g. DEU) — also our location-match signal
+cpv_codes	        ;-joined list of CPV codes (notices can carry several); division = first 2 digits (45=construction)
+deadline	        Submission cut-off (ISO); blank for ~11%
+budget_eur	        ⚠️ misnamed — NOT EUR-converted. It's denominated in currency. Read the pair. Only ~40% populated; treat -1/0 as "not disclosed"
+currency	        Currency for budget_eur
+status	            active
+document_url	    Link to the tender dossier (100% present; many are buyer-portal landing pages, not direct PDFs)
+is_restricted	    Access-restricted document flag
+ingested_at	        When we pulled it
+
+Directly relevant: "no good past-match → scrape/LLM for more vendors" section: our supplier pool (company_profiles, 15,129) is built only from past award winners,
+ and that history is heavily construction-weighted. So the divisions in this snapshot that are thinner in past-award coverage — 72 (IT), 71 (engineering),
+  48 (software), 79 (business services) — are exactly where past-data matching will likely fall short and her scraping/LLM fallback adds the most value. 
+  The CPV-division counts above give her a ranked target list.

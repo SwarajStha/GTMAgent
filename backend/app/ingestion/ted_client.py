@@ -24,6 +24,8 @@ TED_FIELDS: list[str] = [
     "publication-number",
     "publication-date",
     "notice-title",
+    "description-proc",
+    "BT-24-Lot",
     "notice-type",
     "buyer-name",
     "buyer-country",

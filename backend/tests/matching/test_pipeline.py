@@ -61,6 +61,21 @@ def _profile(name: str, text: str, embedder: _KeywordEmbedder, **caps: object) -
     )
 
 
+def test_tender_text_includes_description(db_session) -> None:
+    # The matcher must fold tender.description into the embedding text (aligns
+    # serve-time text with v5 training; companies already embed descriptions).
+    tender = _tender(
+        title="Road resurfacing works",
+        description="Resurface 12km of motorway carriageway near Brno.",
+    )
+    db_session.add(tender)
+    db_session.flush()
+    pipe = MatchingPipeline(embedder=_KeywordEmbedder(), use_lr=False)
+    text = pipe._tender_text(db_session, tender)
+    assert "Road resurfacing works" in text
+    assert "Resurface 12km of motorway carriageway near Brno." in text
+
+
 def test_pipeline_ranks_relevant_company_first(db_session) -> None:
     embedder = _KeywordEmbedder()
     tender = _tender()

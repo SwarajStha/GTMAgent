@@ -22,6 +22,7 @@ class TenderRow(BaseModel):
 
     ted_notice_id: str
     title: str | None = None
+    description: str | None = None
     buyer_name: str | None = None
     buyer_country: str | None = None
     cpv_codes: list[str] = Field(default_factory=list)
@@ -59,6 +60,14 @@ class TenderRow(BaseModel):
         return cls(
             ted_notice_id=str(notice_id),
             title=_pick_str(raw, "notice-title", "BT-21-Procedure"),
+            # Procedure-level description (BT-24); 'BT-24-Lot' is the lot-level
+            # fallback (a multilingual list — `_str_from` takes the first entry).
+            # Verified live: 'description-proc' populates 20/20 on CN notices and
+            # is the same field awards parse + v5 trained on (reduces train/serve
+            # skew when fed into the matcher's tender text).
+            description=_pick_str(
+                raw, "description-proc", "BT-24-Lot", warn_on_miss=False
+            ),
             buyer_name=_pick_str(raw, "buyer-name"),
             buyer_country=_pick_str(raw, "buyer-country"),
             cpv_codes=_pick_cpv_list(raw, "classification-cpv"),

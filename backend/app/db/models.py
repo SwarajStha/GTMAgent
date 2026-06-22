@@ -51,6 +51,11 @@ class Tender(Base):
         String(64), unique=True, index=True, nullable=False
     )
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Procedure-level project description (TED BT-24 / description-proc), original
+    # language. Added 2026-06-22 (migration 0012) so the demand side carries the
+    # same descriptive text the supply side (awards) already has — feeds the
+    # matcher's tender embedding text.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     buyer_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     buyer_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     cpv_codes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)

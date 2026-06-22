@@ -322,3 +322,41 @@ reflections_after: 1 | narrative_source: claude
   the real metrics (parallels the G10 live email verification).
 - **Data-limited (not a defect):** an actual retrain firing needs ≥10 labelled
   feedback with both classes, which the dev DB doesn't have yet.
+
+---
+
+## 2026-06-22 — tender descriptions (BT-24) added + matching A/B
+
+- **What changed:** the contract-notice poller now requests `description-proc`
+  (+ `BT-24-Lot` fallback); new `tenders.description` column (migration `0012`);
+  the matcher folds `tender.description` into `_tender_text`. This gives the
+  demand side the same descriptive text the supply side already has (awards
+  `description`, G6) and aligns serve-time tender text with v5's training
+  (`notice_title + description`).
+- **Backfill:** re-polled the 7-day window — `{fetched: 2986, new: 0, updated:
+  2986, errors: 0}` (idempotent on `ted_notice_id`). **100% description coverage**
+  on re-polled rows (2986/2996; the 10 pre-existing rows predate the field).
+  Avg description ~669 chars, max ~6000.
+
+### A/B smoke (read-only): tender 917 — Czechia hospital construction
+
+Real multilingual MiniLM; same hard-filtered candidate set (101 of 15,129);
+tender embedding text WITHOUT vs WITH the description.
+
+```
+old_text (title+cpv)   135 chars   ->   new_text (title+desc+cpv)  4034 chars
+semantic cosine — OLD:  min 0.42  mean 0.59  max 0.74
+semantic cosine — NEW:  min 0.44  mean 0.61  max 0.74
+TOP-5 reshuffled: 3 of 5 retained; 2 new Czech builders surfaced
+  (Podzimek a synove, PS-STAV Nachod)
+```
+
+**Interpretation (honest):** a modest aggregate lift (mean +0.02, min +0.02) plus
+a real re-ranking — this tender's hard-filtered set is homogeneous (all Czech
+construction firms, already title-similar), so the description mainly
+**discriminates within** the set rather than shifting the whole distribution. The
+larger structural wins: (a) **train/serve skew removed** (tender side now matches
+v5's `notice_title+description` training and the company side's G6 text), and (b)
+on tenders with generic titles the description carries most of the signal, so the
+lift there is bigger. No retrain / re-embed needed — tenders embed on-the-fly per
+match run.

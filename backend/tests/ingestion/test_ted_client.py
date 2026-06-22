@@ -14,6 +14,7 @@ def test_from_ted_response_full() -> None:
     raw = {
         "publication-number": "12345-2026",
         "notice-title": "Construction works for new metro station",
+        "description-proc": {"eng": "Build a new underground station with two platforms."},
         "buyer-name": "City of Munich",
         "buyer-country": "DE",
         "classification-cpv": ["45000000", "45100000"],
@@ -25,6 +26,7 @@ def test_from_ted_response_full() -> None:
     row = TenderRow.from_ted_response(raw)
     assert row.ted_notice_id == "12345-2026"
     assert row.title == "Construction works for new metro station"
+    assert row.description == "Build a new underground station with two platforms."
     assert row.buyer_name == "City of Munich"
     assert row.buyer_country == "DE"
     assert row.cpv_codes == ["45000000", "45100000"]
@@ -48,6 +50,20 @@ def test_from_ted_response_missing_budget() -> None:
     assert row.budget_eur is None
     assert row.currency is None
     assert row.cpv_codes == ["72000000"]
+    assert row.description is None  # absent → None, no warning
+
+
+def test_from_ted_response_description_lot_fallback() -> None:
+    # No procedure-level description; BT-24-Lot carries a multilingual list of
+    # lot descriptions. `_str_from` unwraps the preferred language's first entry.
+    raw = {
+        "publication-number": "22222-2026",
+        "notice-title": "Road resurfacing",
+        "classification-cpv": "45233223",
+        "BT-24-Lot": {"eng": ["Resurface 12km of carriageway", "Replace signage"]},
+    }
+    row = TenderRow.from_ted_response(raw)
+    assert row.description == "Resurface 12km of carriageway"
 
 
 def test_from_ted_response_fallback_keys() -> None:

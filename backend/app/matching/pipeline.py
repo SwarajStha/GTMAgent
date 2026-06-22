@@ -73,6 +73,12 @@ class MatchingPipeline:
         parts: list[str] = []
         if tender.title:
             parts.append(tender.title)
+        # Procurement description (BT-24). v5 trained the tender/query side on
+        # notice_title + description, and the company side already embeds award
+        # descriptions (G6) — including it here aligns serve-time tender text with
+        # training and enriches the semantic signal. NULL on pre-0012 rows → skipped.
+        if tender.description:
+            parts.append(tender.description)
         if tender.cpv_codes:
             parts.append("CPV: " + ", ".join(str(c) for c in tender.cpv_codes))
         doc_text = session.scalar(

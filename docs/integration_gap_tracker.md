@@ -56,6 +56,16 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   advisory = `{45: vol 9, no_signal}`, and the **Claude narrative fired live**
   (grounded, no invented numbers). **Next: frontend (G15/G16) or Understanding
   (G11/G12).**
+- **2026-06-22 — tender descriptions added (matching quality + skew fix).** The
+  contract-notice poller now fetches `description-proc` (BT-24); new
+  `tenders.description` column (migration `0012`); the matcher folds it into the
+  tender embedding text (`_tender_text`). Closes the demand-side gap vs. the
+  supply side (awards already had `description`, G6) and aligns serve-time tender
+  text with v5's training (`notice_title + description`), reducing train/serve
+  skew. Re-poll backfilled 2986/2996 rows (100% on re-polled). 246 tests (+2),
+  ruff-clean. A/B smoke (tender 917): semantic mean 0.59→0.61 + real top-5
+  re-ranking; bigger lift expected where titles are generic. No retrain/re-embed
+  (tenders embed on-the-fly). See smoke record 2026-06-22.
 
 ---
 

@@ -5,6 +5,8 @@ snapshots, and the feedback endpoint snapshotting a match's feature vector.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.api.v1.feedback import FeedbackCreate, _match_features, submit_feedback
 from app.db.models import CompanyProfile, Feedback, Match, Tender
 from app.matching.features import FEATURE_NAMES
@@ -56,6 +58,11 @@ def test_retrain_ignores_feedback_without_snapshot(db_session, tmp_path) -> None
 
 
 def test_retrain_writes_params_and_learns(db_session, tmp_path) -> None:
+    # This is the only feedback test that actually fits an LR, so it needs the
+    # ML deps (requirements-ml.txt). CI installs only the lean requirements-dev,
+    # so skip there — the other retrainer tests cover the guard paths sklearn-free.
+    pytest.importorskip("sklearn")
+
     # Positives prefer high cpv_4digit + semantic; negatives the opposite.
     for _ in range(8):
         _add_feedback(db_session, 1, _feat(cpv_4digit_score=1.0, semantic_score=0.9))

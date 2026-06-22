@@ -255,3 +255,70 @@ tender 2 | CZE | Czechia – Carriageway resurfacing works – D11
   value); budget / value_in_range features discriminate (0.58–0.85 / 1.0) instead
   of saturating at ~1.0. Tender 1 genuinely has no budget → 0.5 fill (correct).
 - **Marked resolved:** G6, G7 (tracker R21/R22).
+
+---
+
+## 2026-06-22 — G13 (scheduler) + G9 (reflection wired to behaviour)
+
+- **What changed:** real `IngestionScheduler` (APScheduler `BackgroundScheduler`,
+  UTC) with 4 cron jobs — contracts (daily) / dossiers (daily) / awards (weekly) /
+  reflect (daily) — opt-in via `scheduler_enabled` (default off), wired into the
+  FastAPI `lifespan`. `Reflector.reflect()` rewritten to compute deterministic
+  metrics, auto-run the feedback→LR retrain (weights lever), compute an advisory
+  per-CPV recommendation (decision B — not auto-applied), and persist each cycle
+  to the new `reflections` table (migration `0011`). Claude narrative when a key
+  is present, deterministic fallback otherwise. `POST /agent/reflect` added.
+- **Environment:** dev DB (Docker `gtmagent-db-1`, `gtm`), `0011` applied,
+  `truststore` SSL, UTF-8 stdout. 244/244 backend tests; ruff-clean new code.
+
+### Smoke A — scheduler wiring (no network, no DB)
+
+```
+start() -> True
+  ingest_contracts   next_run=2026-06-23 03:00:00+00:00  cron hour=3  min=0
+  download_dossiers  next_run=2026-06-23 03:30:00+00:00  cron hour=3  min=30
+  ingest_awards      next_run=2026-06-23 04:00:00+00:00  cron dow=1 hour=4
+  reflect            next_run=2026-06-23 05:00:00+00:00  cron hour=5  min=0
+running after shutdown -> False
+disabled start() -> False | jobs: []
+```
+
+All 4 jobs register with the configured, correctly-staggered next-runs; clean
+shutdown; and disabled mode (the default) registers nothing and doesn't start.
+
+### Smoke B — reflection cycle (dev DB; `Reflector().reflect()` == scheduled `job_reflect`)
+
+```
+feedback model file exists BEFORE: False
+DB state: feedback=0 (pos=0 neg=0 trainable=0) tenders=10 reflections_before=0
+
+[actions] {'cpv_applied': False,
+           'retrain': {'status': 'insufficient', 'n_samples': 0, 'n_pos': 0,
+                       'n_neg': 0, 'min_required': 10},
+           'narrative_source': 'claude'}
+[metrics] agent_runs_total=0  feedback_total=0  avg_rating=None
+          cpv_recommendations=[{'cpv_division': '45', 'tender_volume': 9,
+                                'feedback_count': 0, 'avg_rating': None,
+                                'recommendation': 'no_signal'}]
+[narrative] (Claude) grounded summary — cites 0 runs, the min-10 retrain
+            threshold, and CPV-45 = 9 tenders / no_signal; no invented numbers.
+
+feedback model file exists AFTER: False
+reflections_after: 1 | narrative_source: claude
+```
+
+**Interpretation — wiring confirmed:**
+- **G13:** the scheduled `reflect` callable runs the same code path the cron job
+  would; jobs register and tear down cleanly.
+- **G9 weights lever:** `retrain` correctly reported `insufficient` (0 feedback <
+  10) and **wrote no model file** (before/after both False) — the lever is wired
+  and safely inert without data. The actual-fit path is covered by the unit tests
+  (`test_reflect_records_retrain_outcome` mocked; `test_retrain_writes_params_and_learns`
+  real-sklearn, local).
+- **G9 persistence:** exactly one `reflections` row written per cycle.
+- **G9 CPV advisory:** deterministic — 9 of 10 tenders carry a CPV-45 code →
+  `{division 45, volume 9, no_signal}`, `cpv_applied=False` (advisory only).
+- **Claude path live-verified:** `narrative_source=claude`, narrative grounded in
+  the real metrics (parallels the G10 live email verification).
+- **Data-limited (not a defect):** an actual retrain firing needs ≥10 labelled
+  feedback with both classes, which the dev DB doesn't have yet.

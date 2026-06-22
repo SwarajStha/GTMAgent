@@ -40,6 +40,22 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   route through it. 227/227 tests (Claude path via fake client; suite forced
   offline). Live Claude smoke offered, not yet run. **Next: G9/G13** (scheduler +
   reflection wiring) or the frontend (G15/G16).
+- **2026-06-22 — G13 + G9 done & live-smoked.** **G13:** real `IngestionScheduler`
+  (APScheduler `BackgroundScheduler`, UTC) with 4 cron jobs (contracts daily /
+  dossiers daily / awards weekly / reflect daily), opt-in via `scheduler_enabled`
+  (default off → CI/tests/dev boot stay inert), wired into the FastAPI `lifespan`.
+  **G9:** reflection now actuates behaviour — `Reflector.reflect()` computes
+  deterministic metrics, **auto-runs the feedback→LR retrain** (the weights lever,
+  reversible), and persists every cycle to the new `reflections` table (migration
+  `0011`). CPV recommendations are deterministic + **advisory-only** (decision B —
+  no auto-mutation of `allowed_cpv_codes`). Claude narrative when a key is present,
+  deterministic fallback otherwise; `POST /agent/reflect` exposes it. 244/244
+  tests (+17), ruff-clean on new code. Live smoke: scheduler registered all 4 jobs
+  with correct staggered next-runs; one `reflect()` against the dev DB persisted a
+  row, retrain correctly reported `insufficient` (0 feedback, no file written), CPV
+  advisory = `{45: vol 9, no_signal}`, and the **Claude narrative fired live**
+  (grounded, no invented numbers). **Next: frontend (G15/G16) or Understanding
+  (G11/G12).**
 
 ---
 
@@ -84,6 +100,8 @@ Everything else is downstream of that.
 | R21 | Thin semantic text (G6) | 2026-06-21 | capability text = award title+description; semantic 0.24→0.67–0.82 (live) |
 | R22 | Budget unnormalised/sentinels (G7) | 2026-06-21 | `money.to_eur` EUR conversion + sentinel drop; CZK 1.353 B → €54 M (live) |
 | R23 | Three divergent email drafters / Claude stub (G10) | 2026-06-21 | real `EmailDrafter` (Claude+fallback) + `EvidenceExtractor`; endpoint/buyer/agent unified |
+| R24 | Job 4 scheduler was a stub (G13) | 2026-06-22 | `IngestionScheduler` (APScheduler, 4 cron jobs, opt-in) wired into FastAPI `lifespan`; live wiring smoke |
+| R25 | Reflection narrated but didn't act (G9) | 2026-06-22 | `reflect()` auto-runs feedback→LR retrain (weights) + deterministic CPV advisory; persisted to `reflections` (mig `0011`); live-smoked |
 
 ---
 
@@ -177,10 +195,20 @@ model). **Refs:** PR #10 review #2, backend-API #6, agent #3.
 so it's illustrative until enough ratings accumulate — raise `min_samples` or
 delete the file to fall back to v5. Blending v5 + feedback is a future option.
 
-#### G9 🟡 Reflection loop is built but not wired to behavior
-`reflector.py` narrates recent runs/feedback but nothing reads its output back
-into the weights/CPV filters, and there's no scheduler hook. Naturally sequenced
-after G8 + the scheduler (G13). **Refs:** agent review (remaining) #3.
+#### G9 ✅ Reflection loop wired to behavior — DONE (2026-06-22, live-smoked)
+`Reflector.reflect()` (rewritten) now computes deterministic operational metrics
+(run/feedback stats), **actuates the weights lever** — auto-runs
+`FeedbackRetrainer` when feedback is sufficient, writing the
+`model_params_feedback.json` the pipeline auto-serves (reversible) — and persists
+every cycle to the new `reflections` table (migration `0011`: `metrics` /
+`actions` / `narrative`). CPV recommendations are computed deterministically
+(per-division ingest-volume vs. feedback) and surfaced as **advisory** (decision
+B: no auto-mutation of `allowed_cpv_codes`; `actions.cpv_applied=False`). Claude
+writes the narrative when a key is configured, deterministic fallback otherwise.
+`job_reflect` (G13) runs it daily; `POST /agent/reflect` triggers it on demand.
+Live smoke: a cycle persisted a row, retrain correctly reported `insufficient`
+(0 feedback), CPV advisory `{45: vol 9, no_signal}`, Claude narrative fired live
+(grounded). **Refs:** agent review (remaining) #3.
 
 ### Priority 4 — Email generation (Phase 4)
 
@@ -214,10 +242,17 @@ qualification matching. **Files:** `app/understanding/{extractor,validator}.py`.
 so only the budget-capacity gate is live. Depends on G11 (structured cert
 requirements) + cert data on `company_profiles`. **Refs:** PR #10 review #7.
 
-#### G13 🟡 Job 4 scheduler (APScheduler) is a stub
-Ingestion runs via the `python -m app.ingestion` CLI only; `scheduler.py` is a
-stub. Needed before the reflection loop (G9) can run on a cadence. **Refs:**
-CLAUDE.md §9.
+#### G13 ✅ Job 4 scheduler (APScheduler) — DONE (2026-06-22, live-smoked)
+`IngestionScheduler` (`app/ingestion/scheduler.py`) wraps an APScheduler
+`BackgroundScheduler` (UTC) with 4 cron jobs — contracts (daily),
+dossiers (daily), awards (weekly, short catch-up lookback), and reflect (daily,
+→ G9). Module-level job callables + `JOB_REGISTRY` + `run_job_now()` so jobs can
+be fired directly (live smoke / manual / tests) without waiting on cron.
+**Opt-in** via `scheduler_enabled` (default False → CI/tests/dev boot never poll
+TED); wired into the FastAPI `lifespan` (starts on boot when enabled, stored on
+`app.state.scheduler`, clean shutdown). The `python -m app.ingestion` CLI still
+works for one-shot runs. Live wiring smoke confirmed all 4 jobs register with
+correct staggered next-runs and that disabled mode is inert. **Refs:** CLAUDE.md §9.
 
 #### G14 🟢 Supplier pool = past award winners only (fixed pool)
 `company_profiles` derive solely from companies that won past awards; an unseen
@@ -242,6 +277,29 @@ overrides can't feed G8's retraining. Needs a persistence endpoint
 real outreach needs a real contact source. The matches store maps
 `final_score >= 0.8` → "ready"; confirm that threshold/field lines up with what
 the unified pipeline actually writes (G1). **Refs:** backend-API #8 (minor).
+
+#### G27 🟢 In-UI command palette for ops actions ("/schedule", "/retrain") — future work
+Idea (user, 2026-06-22): a text field in the UI where typing slash-commands runs
+operator actions without touching code/env — e.g. `/retrain` (retrain the LR from
+feedback), `/reflect` (run a reflection cycle), `/schedule on|off` (toggle the
+in-process scheduler at runtime). Gives the product a more agentic feel.
+- **Feasibility: HIGH; mostly already wired.** `/retrain` → existing
+  `POST /api/v1/feedback/retrain`; `/reflect` → existing `POST /api/v1/agent/reflect`
+  (both shipped). The only **new backend** piece is a runtime scheduler toggle:
+  `IngestionScheduler.start()` currently gates on `settings.scheduler_enabled` (an
+  env var read once at boot), so add e.g. `POST /api/v1/agent/scheduler {action:
+  start|stop}` operating on the process-level `app.state.scheduler`, with a
+  `start_now()`/`force=True` that bypasses the env gate. Frontend is a small Vue
+  command field + Pinia actions mapping commands → endpoints.
+- **Caveats to design in:** (a) the scheduler is **in-process per worker** — a
+  runtime toggle only affects the worker that served the request (fine for
+  single-worker dev; for multi-worker prod use the env flag or an external
+  scheduler/lock); (b) a runtime toggle is **not persistent** across restarts
+  (env `SCHEDULER_ENABLED` still governs boot); (c) these commands trigger
+  **live writes / live TED polls** (esp. `/schedule on` → daily contract poll) so
+  gate them (confirm step / auth once G21 lands) and surface the
+  `dry_run`/`act` flags. **Refs:** builds on G13 (scheduler) + G8 (retrain) + G9
+  (reflect); pairs with G15 (frontend shell).
 
 ### Priority 7 — Dependencies, artifacts, hygiene
 

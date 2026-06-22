@@ -1,16 +1,17 @@
 Snapshot profile:
 
-budget present: 40% · deadline present: 89% · document_url: 100%
+description present: 100% (avg ~669 chars, full text, no truncation) · budget present: 40% · deadline present: 89% · document_url: 100%
 Top countries: DEU 990, FRA 339, POL 313, CZE 140, ESP 112, CHE 99…
 Top CPV divisions: 45 (construction) 6822, 72 (IT) 1386, 71 (engineering) 564, 48 (software) 414, 44 (materials) 226…
-Exported: exports/tenders_snapshot_2026-06-22.csv (1.1 MB, 2996 rows).
+Exported: exports/tenders_snapshot_2026-06-22.csv (3.2 MB, 2996 rows).
 
 Column guide:
 
 Column	            Meaning / caveat
 id	                Integer PK (our internal id)
 ted_notice_id	    TED publication number — the natural key, e.g. 428131-2026
-title	            Notice title (original language; multilingual)
+title	            Notice title (original language; multilingual). Format: "Country – <CPV label> – <project name>"
+description         Procurement description (TED BT-24 / description-proc), original language/multilingual. ~100% populated, avg ~669 chars (some up to ~6000). The richest free-text signal for what the project actually involves.
 buyer_name	        Contracting authority
 buyer_country	    Alpha-3 ISO (e.g. DEU) — also our location-match signal
 cpv_codes	        ;-joined list of CPV codes (notices can carry several); division = first 2 digits (45=construction)

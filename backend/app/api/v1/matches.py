@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -242,7 +242,23 @@ class MatchRunResultOut(BaseModel):
 
     tender_id: int
     count: int
+    mode: str  # "lr" (trained model) | "weighted" (operator weights)
+    weights: dict[str, float] | None = None
     matches: list[dict[str, Any]]
+
+
+class MatchWeightsIn(BaseModel):
+    """Operator weights for the legacy four-factor combine (G16).
+
+    Posting these re-ranks the tender in weighted mode instead of the trained LR,
+    so the slider overrides in the UI become a persisted, server-side re-rank
+    rather than ephemeral client state. Each weight is relative (the pipeline
+    normalises by their sum); negatives are rejected."""
+
+    semantic: float = Field(ge=0.0)
+    budget: float = Field(ge=0.0)
+    location: float = Field(ge=0.0)
+    qualification: float = Field(ge=0.0)
 
 
 @router.post("/run/{tender_id}")
@@ -250,11 +266,16 @@ def run_matching(
     tender_id: int,
     db: Annotated[Session, Depends(get_db)],
     top_n: Annotated[int | None, Query(ge=1, le=200)] = None,
+    weights: MatchWeightsIn | None = None,
 ) -> MatchRunResultOut:
     """Rank the company-profile pool for a tender and persist `matches`.
 
     Runs synchronously: the first call loads MiniLM (~10s, then cached). Returns
     the ranked result; fetch full rows afterwards via `GET /matches?tender_id=`.
+
+    Default (no body) uses the trained LR scorer. Posting a `weights` body
+    re-ranks with the legacy four-factor weighted combine using those weights
+    (G16) — the operator's slider overrides, persisted to `matches.weights`.
     """
     tender = db.get(Tender, tender_id)
     if tender is None:
@@ -263,5 +284,22 @@ def run_matching(
     # Imported here so the matching/ML stack is only pulled when matching runs.
     from app.matching.pipeline import MatchingPipeline
 
-    results = MatchingPipeline().run(tender_id, session=db, top_n=top_n)
-    return MatchRunResultOut(tender_id=tender_id, count=len(results), matches=results)
+    if weights is not None:
+        if sum(weights.model_dump().values()) <= 0:
+            raise HTTPException(status_code=422, detail="weights must sum to a positive value")
+        pipeline = MatchingPipeline(weights=weights.model_dump(), use_lr=False)
+        mode = "weighted"
+    else:
+        pipeline = MatchingPipeline()
+        # Honest reporting: the default path serves the trained LR only when the
+        # model params loaded; otherwise it falls back to the fixed-weight combine.
+        mode = "lr" if pipeline.lr_scorer is not None else "weighted"
+
+    results = pipeline.run(tender_id, session=db, top_n=top_n)
+    return MatchRunResultOut(
+        tender_id=tender_id,
+        count=len(results),
+        mode=mode,
+        weights=weights.model_dump() if weights is not None else None,
+        matches=results,
+    )

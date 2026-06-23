@@ -257,10 +257,16 @@ class MatchingPipeline:
                     sa.select(CompanyProfile).where(CompanyProfile.embedding.is_not(None))
                 ).all()
             )
-            if self.lr_scorer is not None:
-                candidates = self._hard_filter(
-                    candidates, tender_cpvs, tender.buyer_country, tender_eur
-                )
+            # Hard filter in BOTH scoring modes. It bounds the candidate set (and
+            # therefore the persisted match rows) to <=_MAX_CANDIDATES with
+            # progressive CPV/country/value relaxation. Without it, the
+            # weighted/legacy path (lr_scorer is None — e.g. an operator weight
+            # re-rank, G16) would score the entire ~15k pool and write a match row
+            # per company. The filter no-ops on small pools (falls back to the
+            # full slice), so unit tests are unaffected.
+            candidates = self._hard_filter(
+                candidates, tender_cpvs, tender.buyer_country, tender_eur
+            )
 
             # Idempotent recompute. Re-matching invalidates any emails grounded in
             # the previous (now-stale) matches, so drop those first to avoid the

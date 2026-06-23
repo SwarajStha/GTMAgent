@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_db
-from app.api.v1.matches import get_match, list_matches, run_matching
+from app.api.v1.matches import MatchWeightsIn, get_match, list_matches, run_matching
 from app.main import app
 
 MATCH_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -165,5 +165,34 @@ def test_run_matching_delegates_to_pipeline_and_shapes_result() -> None:
 
     assert response.tender_id == 1
     assert response.count == 1
+    assert response.mode == "lr"
     assert response.matches[0]["company_name"] == "Floor Pros"
     pipeline_cls.return_value.run.assert_called_once_with(1, session=db, top_n=3)
+
+
+def test_run_matching_with_weights_uses_weighted_mode() -> None:
+    # G16: posting operator weights re-ranks in legacy weighted mode (use_lr=False)
+    # with those weights, instead of the trained LR.
+    db = MagicMock()
+    db.get.return_value = _tender()
+    weights = MatchWeightsIn(semantic=0.5, budget=0.2, location=0.2, qualification=0.1)
+
+    with patch("app.matching.pipeline.MatchingPipeline") as pipeline_cls:
+        pipeline_cls.return_value.run.return_value = []
+        response = run_matching(1, db=db, weights=weights)
+
+    expected = {"semantic": 0.5, "budget": 0.2, "location": 0.2, "qualification": 0.1}
+    assert response.mode == "weighted"
+    assert response.weights == expected
+    pipeline_cls.assert_called_once_with(weights=expected, use_lr=False)
+
+
+def test_run_matching_rejects_zero_weights() -> None:
+    db = MagicMock()
+    db.get.return_value = _tender()
+    weights = MatchWeightsIn(semantic=0.0, budget=0.0, location=0.0, qualification=0.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        run_matching(1, db=db, weights=weights)
+
+    assert exc_info.value.status_code == 422

@@ -59,6 +59,137 @@ export interface EmailDraft {
   evidence: string[]
   recipientType?: 'supplier' | 'buyer'
   recommendedSuppliers?: RecommendedSupplier[]
+  // Whether `recipient` is a real/known contact vs. a derived guess. Supplier
+  // contacts are guessed from the company website (we hold no verified email),
+  // so the UI flags them; buyer outreach addresses a real TED-published org.
+  recipientVerified?: boolean
+  companyWebsite?: string | null
+}
+
+export interface AwardItem {
+  id: number
+  tedNoticeId: string
+  cpvCode: string | null
+  buyerName: string | null
+  buyerCountry: string | null
+  winnerName: string
+  contractValueEur: number | null
+  awardDate: string | null
+  nOffersReceived: number | null
+}
+
+export interface CompanyItem {
+  id: number
+  canonicalName: string
+  country: string | null
+  aliases: string[]
+  awardCount: number
+  totalContractValueEur: number | null
+  latestAwardDate: string | null
+}
+
+export interface AgentStepItem {
+  tool: string
+  args: Record<string, unknown>
+}
+
+export interface AgentRunResult {
+  goal: string
+  steps: AgentStepItem[]
+  output: string
+  truncated: boolean
+}
+
+export interface ReflectionResult {
+  id: string
+  metrics: Record<string, unknown>
+  actions: Record<string, unknown>
+  narrative: string
+}
+
+export const awards: AwardItem[] = [
+  {
+    id: 1,
+    tedNoticeId: '2026/S 071-216540',
+    cpvCode: '45000000',
+    buyerName: 'Stadt Leipzig',
+    buyerCountry: 'DEU',
+    winnerName: 'Jaeger Ausbau GmbH & Co. KG',
+    contractValueEur: 4250000,
+    awardDate: '2026-04-18',
+    nOffersReceived: 6,
+  },
+  {
+    id: 2,
+    tedNoticeId: '2026/S 064-198221',
+    cpvCode: '45233223',
+    buyerName: 'Ředitelství silnic a dálnic',
+    buyerCountry: 'CZE',
+    winnerName: 'EUROVIA CZ a.s.',
+    contractValueEur: 54120000,
+    awardDate: '2026-03-30',
+    nOffersReceived: 4,
+  },
+  {
+    id: 3,
+    tedNoticeId: '2026/S 058-181004',
+    cpvCode: '71300000',
+    buyerName: 'Ville de Lyon',
+    buyerCountry: 'FRA',
+    winnerName: 'Ingérop Conseil et Ingénierie',
+    contractValueEur: 1320000,
+    awardDate: '2026-03-12',
+    nOffersReceived: 8,
+  },
+]
+
+export const companies: CompanyItem[] = [
+  {
+    id: 1,
+    canonicalName: 'EUROVIA CZ a.s.',
+    country: 'CZE',
+    aliases: ['EUROVIA CZ, a.s.', 'Eurovia CZ'],
+    awardCount: 38,
+    totalContractValueEur: 612000000,
+    latestAwardDate: '2026-03-30',
+  },
+  {
+    id: 2,
+    canonicalName: 'STRABAG SE',
+    country: 'AUT',
+    aliases: ['STRABAG', 'Strabag AG'],
+    awardCount: 51,
+    totalContractValueEur: 938000000,
+    latestAwardDate: '2026-04-02',
+  },
+  {
+    id: 3,
+    canonicalName: 'Jaeger Ausbau GmbH & Co. KG',
+    country: 'DEU',
+    aliases: ['Jaeger Ausbau'],
+    awardCount: 9,
+    totalContractValueEur: 22400000,
+    latestAwardDate: '2026-04-18',
+  },
+]
+
+export const agentRunSample: AgentRunResult = {
+  goal: 'Find the strongest supplier for the Leipzig fit-out tender and draft outreach.',
+  steps: [
+    { tool: 'find_matches', args: { tender_id: 16, top_n: 3 } },
+    { tool: 'draft_email', args: { match_id: 'sample-match-id' } },
+  ],
+  output:
+    'Ranked the supplier pool for tender 16, surfaced three German fit-out contractors, and drafted an evidence-grounded outreach email to the top match. (Sample data — backend agent not reachable.)',
+  truncated: false,
+}
+
+export const reflectionSample: ReflectionResult = {
+  id: 'sample-reflection',
+  metrics: { agent_runs_total: 0, feedback_total: 0, avg_rating: null },
+  actions: { cpv_applied: false, retrain: { status: 'insufficient', n_samples: 0 } },
+  narrative:
+    'No feedback has accumulated yet, so the matching weights were left unchanged. (Sample data — backend reflection not reachable.)',
 }
 
 export const tenders: TenderItem[] = [

@@ -6,6 +6,9 @@ const navItems = [
   { to: '/tenders', label: 'Tenders', short: 'TD' },
   { to: '/matches', label: 'Matches', short: 'MT' },
   { to: '/emails', label: 'Emails', short: 'EM' },
+  { to: '/awards', label: 'Awards', short: 'AW' },
+  { to: '/companies', label: 'Companies', short: 'CO' },
+  { to: '/agent', label: 'Agent', short: 'AG' },
 ]
 
 const pipelineSteps = [

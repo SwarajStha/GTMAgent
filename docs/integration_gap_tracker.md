@@ -56,6 +56,34 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   advisory = `{45: vol 9, no_signal}`, and the **Claude narrative fired live**
   (grounded, no invented numbers). **Next: frontend (G15/G16) or Understanding
   (G11/G12).**
+- **2026-06-23 — G17b (recipient + threshold honesty) + a G16 follow-up bug fix.**
+  **G17b:** the supplier email recipient no longer fabricates an authoritative
+  `sales@<domain>` — it derives an explicitly *unverified* candidate from the
+  company website (or "No verified contact on file" when there's none) and the UI
+  flags it + links the website to find the real contact; the match-status "ready"
+  cut-off dropped 0.8 → 0.6 to match the calibrated LR's actual win-probability
+  range (the old 0.8 almost never fired, so HomeView/Matches "ready" counts read 0).
+  **Bug fix (found in review, caused by G16):** the weighted re-rank path
+  (`use_lr=False`) skipped the hard filter, so it scored the **entire ~15k pool and
+  persisted a match row per company**; the hard filter now runs in *both* modes
+  (no-ops on small/test pools). The run endpoint also now reports the *actual* mode
+  (lr vs weighted) instead of assuming lr. Backend 268 tests still green; frontend
+  lint + build clean.
+- **2026-06-23 — Frontend awards/companies/agent UI + weight persistence (G15/G16).**
+  **G15:** three new Pinia stores (`awards`/`companies`/`agent`) + views
+  (`AwardsView`/`CompaniesView`/`AgentView`) + routes + nav entries (AW/CO/AG),
+  each wired to the existing REST API (`/awards`, `/companies`, `/agent/run` +
+  `/agent/reflect`) with the same live-API-or-sample-fallback pattern as the
+  Tenders/Matches stores. **G16:** the weight sliders now persist — a new
+  `weights` body on `POST /matches/run/{id}` re-ranks the tender in legacy
+  weighted mode with the operator's weights (default = trained LR); `MatchesView`
+  gained an "Apply weights & re-rank (save)" action that POSTs them, so overrides
+  become a durable server-side re-rank (persisted to `matches.weights`) instead of
+  ephemeral client state. Backend: 266 → **268 tests** (+2: weighted-mode +
+  zero-weight-reject), ruff-clean. Frontend: `npm run lint` + `npm run build`
+  (vue-tsc) clean. Live API smoke: `/awards` total 21,015, `/companies` 15,129,
+  `/matches` 246 against the dev DB. Remaining frontend nit: G17b (real email
+  recipient source).
 - **2026-06-23 — Understanding layer + certification gate (pipeline completeness).**
   **G11:** `FieldExtractor` is real — Claude (evidence-constrained JSON, lazy/
   injectable client, offline fallback that builds the profile from the trustworthy
@@ -140,6 +168,9 @@ Everything else is downstream of that.
 | R26 | Understanding `FieldExtractor` was a stub (G11) | 2026-06-23 | real Claude extractor + validator + `understanding.service`; `tenders.tender_profile` JSONB (mig `0013`); `POST /tenders/{id}/extract` + agent tool |
 | R27 | Cert disqualifier gate never fired (G12) | 2026-06-23 | gate fed extracted `required_certifications` vs `company_profiles.certifications`; conservative (positive-evidence only); DB-backed tests |
 | R28 | Fixed supplier pool undocumented (G14) | 2026-06-23 | documented in tracker / `profile_builder` / architecture as an accepted V1 constraint |
+| R29 | No UI for awards/companies/agent (G15) | 2026-06-23 | 3 Pinia stores + views + routes + nav, wired to `/awards`,`/companies`,`/agent`; live-API-or-sample fallback |
+| R30 | Weight sliders cosmetic (G16) | 2026-06-23 | `POST /matches/run/{id}` accepts a `weights` body → weighted re-rank persisted to `matches.weights`; "Apply weights & re-rank" in `MatchesView` |
+| R31 | Fabricated email recipient + stale ready-threshold (G17b) | 2026-06-23 | supplier contact derived from website + flagged unverified (no fake `sales@`); ready cut-off 0.8→0.6; weighted-mode hard-filter bug fixed |
 
 ---
 
@@ -328,21 +359,47 @@ v5 README "Known Limitations" #3.
 
 ### Priority 6 — Frontend
 
-#### G15 🟡 No UI for awards / companies / agent
-`/awards`, `/companies`, `/agent/run` work at the API level but have no Pinia
-stores or views; nav is only Command/Tenders/Matches/Emails. **Refs:**
-backend-API #4.
+#### G15 ✅ UI for awards / companies / agent — DONE (2026-06-23)
+Added three Pinia stores (`stores/{awards,companies,agent}.ts`) and views
+(`views/{AwardsView,CompaniesView,AgentView}.vue`), registered routes, and nav
+entries (AW/CO/AG) in `AppShell.vue`. Awards/Companies wire to `GET /awards` /
+`GET /companies` (search + country filter, value/award rollups, source badge);
+Agent wires to `POST /agent/run` (goal + dry-run → steps + output) and
+`POST /agent/reflect` (metrics/actions/narrative). All follow the existing
+live-API-or-sample-fallback pattern (small sample arrays added to `sampleData.ts`)
+so the UI renders offline. `npm run lint` + `npm run build` (vue-tsc) clean; live
+API smoke returned 21,015 awards / 15,129 companies / 246 matches from the dev DB.
+**Refs:** backend-API #4.
 
-#### G16 🟡 Weight sliders are cosmetic
-`MatchesView.vue` recomputes scores client-side only; nothing POSTs back, so
-overrides can't feed G8's retraining. Needs a persistence endpoint
-(`PATCH /matches/{id}/weights` or per-tender weights). **Refs:** backend-API #5.
+#### G16 ✅ Weight sliders persist + re-rank — DONE (2026-06-23)
+`POST /api/v1/matches/run/{tender_id}` now accepts an optional `weights` body
+(`semantic`/`budget`/`location`/`qualification`); when present the pipeline runs in
+legacy weighted mode (`MatchingPipeline(weights=…, use_lr=False)`) and persists the
+operator's weights to `matches.weights` — so the slider overrides become a durable,
+server-side re-rank instead of ephemeral client recompute (default body-less call
+still uses the trained LR). `MatchesView.vue` gained an "Apply weights & re-rank
+(save)" action (per selected tender); the sliders still preview live client-side.
+Zero-summed weights are rejected (422). The response carries `mode`
+(`lr`|`weighted`) + the applied `weights`. **Note (honest):** weighted mode
+overrides the calibrated LR ranking on purpose — it's an operator review lever, not
+a replacement for the model; the durable feedback that feeds G8 retraining still
+comes from thumbs-up/down on the resulting matches. **Refs:** backend-API #5.
 
-#### G17b 🟢 Email recipient + match-store thresholds are placeholders
-`emails.ts:recipientFor()` fabricates `sales@<website-domain>` as the recipient —
-real outreach needs a real contact source. The matches store maps
-`final_score >= 0.8` → "ready"; confirm that threshold/field lines up with what
-the unified pipeline actually writes (G1). **Refs:** backend-API #8 (minor).
+#### G17b ✅ Email recipient + match-store thresholds — DONE (2026-06-23)
+`emails.ts` no longer fabricates an authoritative `sales@<domain>`: `supplierContact()`
+derives an explicitly **unverified** candidate (`info@<domain>`) from the company
+website, or returns "No verified contact on file" when there is no site — and the
+EmailsView surfaces an "unverified contact" badge + a link to the website to find
+the real contact (`EmailDraft.recipientVerified` / `companyWebsite`). Buyer outreach
+keeps the real TED-published buyer org. The matches store's "ready" threshold moved
+`final_score >= 0.8 → 0.6` (named `READY_SCORE`) to match the calibrated LR's actual
+win-probability range — the old 0.8 essentially never fired, so HomeView's "Ready
+matches" + the Matches "ready" badge read 0 even for strong matches. **Refs:**
+backend-API #8.
+
+> **Note — true verified contacts** (a real CRM/enrichment source for supplier
+> emails) remain out of scope: TED award data carries none, same data limitation as
+> G14. G17b makes the *absence* honest rather than inventing an address.
 
 #### G27 🟢 In-UI command palette for ops actions ("/schedule", "/retrain") — future work
 Idea (user, 2026-06-22): a text field in the UI where typing slash-commands runs

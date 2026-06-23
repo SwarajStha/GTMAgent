@@ -250,6 +250,64 @@ G15/G16 (frontend), G19/G20 (hygiene).
   `required_certifications: []` because the notice states none — no hallucinated
   cert (parallels the G10 live email verify). See `docs/matching_pipeline_smoke_record.md`.
 
+## 2026-06-23 — Frontend: awards/companies/agent UI + persisted weight re-rank (G15/G16)
+- **Trigger:** the Frontend band of the gap tracker — the APIs for awards,
+  companies, and the agent existed but had no UI, and the match weight sliders only
+  recomputed client-side (nothing persisted).
+- **G15 — three new screens.** Added Pinia stores + views + routes + nav for
+  **Awards** (`GET /awards`: winner/buyer/value/date, search + country filter),
+  **Companies** (`GET /companies`: canonical name + award-count/total-value
+  rollups), and **Agent** (`POST /agent/run` -> planned steps + output;
+  `POST /agent/reflect` -> metrics/actions/narrative). Each reuses the established
+  live-API-or-sample-fallback pattern (modest sample arrays added to
+  `sampleData.ts`) so every screen renders even with the backend down, and shows a
+  Live/Sample source badge.
+- **G16 — sliders that stick.** Extended `POST /matches/run/{id}` with an optional
+  `weights` body; when supplied, the pipeline runs in legacy weighted mode and
+  persists the operator's weights to `matches.weights`. `MatchesView` got an
+  "Apply weights & re-rank (save)" action so the override is a durable server-side
+  re-rank, not throwaway client state (the live client-side preview stays for
+  instant feedback). The default body-less call still serves the trained LR.
+  Honest framing: weighted mode is an operator *review* lever that intentionally
+  overrides the calibrated model ranking — the signal that actually feeds G8
+  retraining is still the thumbs-up/down feedback on the resulting matches.
+- **Verified:** backend 266 -> **268 tests** (+2: weighted mode + zero-weight 422),
+  ruff-clean; frontend `npm run lint` + `npm run build` (vue-tsc) clean; live API
+  smoke returned 21,015 awards / 15,129 companies / 246 matches from the dev DB
+  (Windows console needed UTF-8 stdout for Czech/Slovenian company names — the
+  recurring cp1252 gotcha, not an API issue).
+
+## 2026-06-23 — G17b honesty pass + a G16 follow-up bug fix (from a review sweep)
+- **Trigger:** close G17b (the last frontend nit) and a requested thorough
+  codebase review.
+- **G17b — recipient + threshold honesty.** The supplier email recipient stopped
+  fabricating an authoritative `sales@<domain>`: it now derives an explicitly
+  *unverified* `info@<domain>` candidate from the company website (or "No verified
+  contact on file" when there's none), and the UI flags it + links the site to find
+  the real contact. Buyer outreach still targets the real TED buyer org. The
+  match-status "ready" cut-off moved 0.8 → 0.6 (`READY_SCORE`) to match the
+  calibrated LR's win-probability range — the old 0.8 essentially never fired, so
+  "ready" counts read 0 even for strong matches.
+- **Bug found in review (caused by G16) — fixed.** The weighted re-rank path
+  (`use_lr=False`) skipped the pipeline hard filter, so it scored the **entire ~15k
+  pool and persisted a match row per company** per "Apply weights" click. The hard
+  filter now runs in *both* scoring modes (it no-ops on the small pools tests use,
+  falling back to the full slice), bounding candidates/persisted rows to ≤200. The
+  run endpoint also now reports the *actual* scorer mode (`lr` only when the model
+  params are loaded, else `weighted`) instead of assuming `lr`.
+- **Verified:** backend **268 tests** still green (the hard-filter change is
+  test-safe — verified each pipeline test's tiny pool falls through the filter),
+  ruff-clean; frontend lint + build clean.
+- **Other review findings (logged, not fixed — low priority):** AppShell header
+  chips ("3 drafts pending", "4 matches scored", "TED source active") + the
+  "Pipeline" steps are hardcoded/stale (cosmetic; HomeView already shows live
+  metrics); the agent `find_matches` tool opens its own DB session instead of using
+  the loop's (works, slightly inconsistent); a few stale comments (`tools.py`
+  "NotImplementedError the current stub raises" — the pipeline is implemented;
+  `feedback.py` docstring "Phase 5" — G8 shipped); the generic `embeddings`
+  Vector(768) table is declared but has no producer/consumer (intentional
+  catch-all, see CLAUDE.md). None block anything.
+
 ---
 
 # Future Decisions (design rationale)

@@ -160,8 +160,12 @@ export const useMatchesStore = defineStore('matches', {
           throw new Error(`Run matching returned ${response.status}`)
         }
         const result = (await response.json()) as { mode: string }
-        // Refresh the full match list so the new rows show up in the view.
-        await this.fetchAll()
+        // Refresh THIS tender's matches, not the global list. A plain fetchAll()
+        // returns the top-N matches by score across *all* tenders, so a niche
+        // tender whose matches score below the global top-100 would show an empty
+        // list even though matching succeeded. Filtering by tender_id always
+        // surfaces the rows we just wrote.
+        await this.fetchAll(new URLSearchParams({ tender_id: tenderId }))
         this.source = 'api'
         return result.mode
       } catch (error) {

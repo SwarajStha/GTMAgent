@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useEmailsStore } from '@/stores/emails'
 import { useMatchesStore } from '@/stores/matches'
 import type { MatchItem } from '@/stores/sampleData'
@@ -18,6 +18,39 @@ const weights = ref({
   location: 0.2,
   qualification: 0.2,
 })
+
+// Centered tender picker (replaces the native <select>, which renders an
+// unstylable full-height browser dropdown). Closes on selection / backdrop / Esc.
+const tenderPickerOpen = ref(false)
+const tenderSearch = ref('')
+
+const selectedTenderLabel = computed(() => {
+  if (tenderFilter.value === 'all') return 'All tenders'
+  return tendersStore.items.find((t) => t.id === tenderFilter.value)?.title ?? 'All tenders'
+})
+
+const pickerTenders = computed(() => {
+  const q = tenderSearch.value.trim().toLowerCase()
+  if (!q) return tendersStore.items
+  return tendersStore.items.filter((t) => t.title.toLowerCase().includes(q))
+})
+
+function closeTenderPicker() {
+  tenderPickerOpen.value = false
+  tenderSearch.value = ''
+}
+
+function pickTender(id: string) {
+  tenderFilter.value = id
+  closeTenderPicker()
+}
+
+function onPickerKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeTenderPicker()
+}
+
+onMounted(() => window.addEventListener('keydown', onPickerKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onPickerKeydown))
 
 onMounted(async () => {
   await Promise.all([matchesStore.fetchAll(), tendersStore.fetchAll()])
@@ -75,6 +108,16 @@ const selectedMatch = computed(
     matchesStore.items[0],
 )
 
+// Selecting a tender loads its own matches (existing or empty) rather than
+// filtering whatever global slice happened to be loaded — keeps the list and the
+// detail panel in sync with the chosen tender.
+watch(tenderFilter, async (value) => {
+  const params =
+    value === 'all' ? new URLSearchParams() : new URLSearchParams({ tender_id: value })
+  await matchesStore.fetchAll(params)
+  selectedId.value = filteredMatches.value[0]?.id ?? ''
+})
+
 const selectedTender = computed(() =>
   tendersStore.items.find((tender) => tender.id === selectedMatch.value?.tenderId),
 )
@@ -122,7 +165,10 @@ async function findMatches() {
   actionMessage.value = ''
   try {
     const mode = await matchesStore.runMatching(tenderFilter.value)
-    actionMessage.value = `Matching complete (${mode === 'weighted' ? 'weighted' : 'trained model'}) — ranked suppliers updated`
+    selectedId.value = filteredMatches.value[0]?.id ?? ''
+    actionMessage.value = filteredMatches.value.length
+      ? `Matching complete (${mode === 'weighted' ? 'weighted' : 'trained model'}) — ranked suppliers updated`
+      : 'Matching complete — no eligible suppliers passed the filters for this tender'
   } catch {
     actionMessage.value = matchesStore.error ?? 'Run matching failed'
   }
@@ -135,6 +181,7 @@ async function applyWeights() {
   actionMessage.value = ''
   try {
     await matchesStore.runMatching(tenderFilter.value, undefined, { ...weights.value })
+    selectedId.value = filteredMatches.value[0]?.id ?? ''
     actionMessage.value = 'Weights applied — tender re-ranked and saved'
   } catch {
     actionMessage.value = matchesStore.error ?? 'Apply weights failed'
@@ -174,12 +221,14 @@ async function submitFeedback(rating: 1 | -1) {
       <div class="surface p-4">
         <p class="section-kicker">Match scoring</p>
         <h2 class="mt-1 section-title">Rank companies by evidence fit</h2>
-        <select v-model="tenderFilter" class="field mt-4 w-full">
-          <option value="all">All tenders</option>
-          <option v-for="tender in tendersStore.items" :key="tender.id" :value="tender.id">
-            {{ tender.title }}
-          </option>
-        </select>
+        <button
+          type="button"
+          class="field mt-4 flex w-full items-center justify-between gap-2 text-left"
+          @click="tenderPickerOpen = true"
+        >
+          <span class="truncate">{{ selectedTenderLabel }}</span>
+          <span class="shrink-0 text-slate-400">▾</span>
+        </button>
         <select v-model="statusFilter" class="field mt-4 w-full">
           <option value="all">All matches</option>
           <option value="ready">Ready</option>
@@ -396,5 +445,59 @@ async function submitFeedback(rating: 1 | -1) {
         </article>
       </section>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="tenderPickerOpen"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
+        @click="closeTenderPicker"
+      >
+        <div
+          class="flex max-h-[72vh] w-full max-w-xl flex-col rounded-lg border border-slate-200 bg-white shadow-xl"
+          @click.stop
+        >
+          <div class="flex items-center gap-2 border-b border-slate-200 p-3">
+            <input
+              v-model="tenderSearch"
+              class="field w-full"
+              placeholder="Search tenders…"
+            >
+            <button
+              class="btn-secondary h-10 shrink-0 px-3 text-xs"
+              type="button"
+              @click="closeTenderPicker"
+            >
+              Close
+            </button>
+          </div>
+          <div class="overflow-y-auto p-1">
+            <button
+              type="button"
+              class="block w-full rounded px-3 py-2 text-left text-sm font-semibold leading-5 hover:bg-slate-100"
+              :class="tenderFilter === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-700'"
+              @click="pickTender('all')"
+            >
+              All tenders
+            </button>
+            <button
+              v-for="tender in pickerTenders"
+              :key="tender.id"
+              type="button"
+              class="block w-full rounded px-3 py-2 text-left text-sm font-semibold leading-5 hover:bg-slate-100"
+              :class="tenderFilter === tender.id ? 'bg-emerald-50 text-emerald-700' : 'text-slate-700'"
+              @click="pickTender(tender.id)"
+            >
+              {{ tender.title }}
+            </button>
+            <p
+              v-if="pickerTenders.length === 0"
+              class="px-3 py-6 text-center text-sm font-semibold text-slate-400"
+            >
+              No tenders match “{{ tenderSearch }}”.
+            </p>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

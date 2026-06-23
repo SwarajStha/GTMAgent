@@ -56,6 +56,31 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   advisory = `{45: vol 9, no_signal}`, and the **Claude narrative fired live**
   (grounded, no invented numbers). **Next: frontend (G15/G16) or Understanding
   (G11/G12).**
+- **2026-06-23 — Understanding layer + certification gate (pipeline completeness).**
+  **G11:** `FieldExtractor` is real — Claude (evidence-constrained JSON, lazy/
+  injectable client, offline fallback that builds the profile from the trustworthy
+  tender columns) + `ExtractionValidator` (CPV/budget/deadline repair) +
+  `understanding.service.extract_and_store_tender_profile`, persisting a structured
+  `TenderProfile` to the new `tenders.tender_profile` JSONB (migration `0013`).
+  Exposed via `POST /tenders/{id}/extract` and an `extract_tender_profile` agent
+  tool. The trustworthy columns (CPV/title/budget/country/deadline) stay
+  authoritative; Claude only adds summary/required_certifications/capabilities/
+  keywords/language. **G12:** the disqualifier's cert gate now fires on the
+  extracted `required_certifications` vs. each company's
+  `company_profiles.certifications`, made **conservative** — it only disqualifies on
+  *positive evidence* a company lacks a required cert (known cert set), never on
+  absent cert data, so a tender that lists a cert can't nuke the whole pool. Inert
+  in production until company-cert data exists (documented limitation, same shape
+  as G9's data-limited retrain). Extracted capabilities/keywords also feed the
+  legacy qualification terms. **G14:** documented the fixed-pool constraint
+  (suppliers = past award winners). 246 → **266 tests** (+20: extractor/validator/
+  service/disqualifier/pipeline cert gate), ruff-clean, single Alembic head `0013`.
+  Matching stays cheap/deterministic — extraction is an explicit opt-in step, never
+  run inside `MatchingPipeline.run`. **Manual step:** `alembic upgrade head` (0013,
+  applied). **Live-verified** on the dev DB: Claude extracted a grounded profile
+  from a German landscaping tender (correct CPV/summary/18-item capability list,
+  `required_certifications=[]` — no hallucinated cert), persisted + round-tripped.
+  See smoke record 2026-06-23.
 - **2026-06-22 — tender descriptions added (matching quality + skew fix).** The
   contract-notice poller now fetches `description-proc` (BT-24); new
   `tenders.description` column (migration `0012`); the matcher folds it into the
@@ -112,6 +137,9 @@ Everything else is downstream of that.
 | R23 | Three divergent email drafters / Claude stub (G10) | 2026-06-21 | real `EmailDrafter` (Claude+fallback) + `EvidenceExtractor`; endpoint/buyer/agent unified |
 | R24 | Job 4 scheduler was a stub (G13) | 2026-06-22 | `IngestionScheduler` (APScheduler, 4 cron jobs, opt-in) wired into FastAPI `lifespan`; live wiring smoke |
 | R25 | Reflection narrated but didn't act (G9) | 2026-06-22 | `reflect()` auto-runs feedback→LR retrain (weights) + deterministic CPV advisory; persisted to `reflections` (mig `0011`); live-smoked |
+| R26 | Understanding `FieldExtractor` was a stub (G11) | 2026-06-23 | real Claude extractor + validator + `understanding.service`; `tenders.tender_profile` JSONB (mig `0013`); `POST /tenders/{id}/extract` + agent tool |
+| R27 | Cert disqualifier gate never fired (G12) | 2026-06-23 | gate fed extracted `required_certifications` vs `company_profiles.certifications`; conservative (positive-evidence only); DB-backed tests |
+| R28 | Fixed supplier pool undocumented (G14) | 2026-06-23 | documented in tracker / `profile_builder` / architecture as an accepted V1 constraint |
 
 ---
 
@@ -241,16 +269,38 @@ back to the template cleanly). **Refs:** backend-API #3, agent #1.
 
 ### Priority 5 — Pipeline completeness
 
-#### G11 🟡 Understanding layer (`FieldExtractor`) is a stub
-No structured `TenderProfile`; the matcher reads tender columns + dossier text
-directly. Blocks the disqualifier's certification gate (G12) and richer
-qualification matching. **Files:** `app/understanding/{extractor,validator}.py`.
-**Refs:** CLAUDE.md §9 Phase 2.
+#### G11 ✅ Understanding layer (`FieldExtractor`) — DONE (2026-06-23)
+`FieldExtractor.extract_tender(raw_text, base=...)` calls Claude
+(evidence-constrained JSON, lazy/injectable client, `claude-sonnet-4-6`) to enrich
+a tender's text into a structured `TenderProfile` — summary, **required
+certifications**, required capabilities, keywords, language — while the trustworthy
+columns passed in as `base` (CPV/title/budget/country/deadline) stay authoritative
+and are the whole profile when offline (deterministic fallback). `ExtractionValidator`
+repairs CPV format / drops sentinel-and-implausible budgets / flags past deadlines /
+dedupes lists. `understanding.service.extract_and_store_tender_profile` orchestrates
+and persists to the new `tenders.tender_profile` JSONB (migration `0013`, with a
+`_meta` provenance block). It is an **explicit opt-in step** —
+`POST /api/v1/tenders/{id}/extract`, the `extract_tender_profile` agent tool, or a
+future scheduled sweep — never run inside `MatchingPipeline.run`, so matching stays
+cheap and deterministic (≤1 LLM call per tender). Offline-safe via the
+`_offline_extractor` conftest fixture; Claude path tested with an injected fake
+client. **Files:** `app/understanding/{extractor,validator,service}.py`,
+`app/api/v1/tenders.py`, `app/agent/tools.py`. 
 
-#### G12 🟡 Disqualifier certification gate never fires
-`pipeline.run` passes `required_certifications=[]` / `company_certifications=[]`,
-so only the budget-capacity gate is live. Depends on G11 (structured cert
-requirements) + cert data on `company_profiles`. **Refs:** PR #10 review #7.
+#### G12 ✅ Disqualifier certification gate — DONE (2026-06-23)
+`pipeline.run` now feeds the tender's extracted `required_certifications` (from the
+stored `tender_profile`) and each company's `company_profiles.certifications` into
+`Disqualifier.check`. The gate is **conservative / closed-world only on positive
+evidence**: it disqualifies a company only when we *know* its cert set (non-empty,
+or `company_certifications_known=True`) and a required cert is missing — never on
+*absent* company-cert data. This avoids the trap where a tender that lists a
+required certification would otherwise disqualify the entire pool (no company has
+cert data in the MVP). The gate is therefore **wired end-to-end and fires correctly
+when company-cert data is present** (proven by DB-backed tests) but stays inert in
+production until such data exists — the same "wired but data-limited" shape as G9's
+retrain. A tender that was never run through extraction (`tender_profile` NULL)
+keeps the prior column-only behaviour. **Refs:** PR #10 review #7; depends on G11
+(done) + future company-cert data (see G14).
 
 #### G13 ✅ Job 4 scheduler (APScheduler) — DONE (2026-06-22, live-smoked)
 `IngestionScheduler` (`app/ingestion/scheduler.py`) wraps an APScheduler
@@ -264,11 +314,17 @@ TED); wired into the FastAPI `lifespan` (starts on boot when enabled, stored on
 works for one-shot runs. Live wiring smoke confirmed all 4 jobs register with
 correct staggered next-runs and that disabled mode is inert. **Refs:** CLAUDE.md §9.
 
-#### G14 🟢 Supplier pool = past award winners only (fixed pool)
-`company_profiles` derive solely from companies that won past awards; an unseen
-company can never match. Lift later via Phase-5 scraped capability profiles
-(the "demand side"). Acceptable V1 constraint — document it. **Refs:** PR #10
-review #8, v5 README "Known Limitations" #3.
+#### G14 ✅ Supplier pool = past award winners only (fixed pool) — DOCUMENTED (2026-06-23)
+`company_profiles` derive solely from companies that won past TED awards
+(`profile_builder.build_company_profiles`), so a company that has never won a
+listed award can never surface as a match, and company-side fields we don't get
+from award data — notably **certifications** (the G12 input) — are absent. This is
+an **accepted V1 constraint**, not a bug: the demand side is bounded by what TED
+publishes. The lift path is Phase-5 scraped/enriched capability profiles (which
+would also supply the company-cert data that activates the G12 gate in production).
+Documented here, in `app/matching/profile_builder.py` (module docstring), and in
+`docs/architecture.md` (deferred/known-limitations). **Refs:** PR #10 review #8,
+v5 README "Known Limitations" #3.
 
 ### Priority 6 — Frontend
 

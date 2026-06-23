@@ -120,17 +120,23 @@ Three jobs on every push / PR: backend pytest, frontend lint + build,
 Alembic upgrade check against a real pgvector service container.
 
 ## Deferred / not in scope yet
-- **APScheduler wiring (Job 4)** — CLI exists; the in-process loop does not.
-- **Understanding layer** — Claude `FieldExtractor` (tool-use enforced schema)
-  + post-extraction validator. Today the matcher reads tender columns + dossier
-  text directly instead of a structured `TenderProfile`.
-- **LR weight retraining** — `feedback` is captured and `matches.weights` snapshots
-  the weights used, but the logistic-regression learner that retrains from
-  feedback (`app/matching/lr_weights.py`) is not yet driving live weights.
-- **Claude-written emails** — endpoints draft deterministically; swapping in the
-  `EmailDrafter` Claude call is the planned upgrade.
-- **Web-scraped `company_profiles`** — profiles are derived from award history
-  only (thin). Per-portal dossier scraping is deferred (see [Notes.md](Notes.md)).
+
+> Several items previously listed here shipped in the 2026-06-21→23 integration
+> sprints — see `docs/integration_gap_tracker.md` for the authoritative status.
+> **Now done:** APScheduler Job 4 (G13), the Understanding layer (G11), LR
+> retraining from feedback (G8), and Claude-written emails (G10).
+
+- **Web-scraped / enriched `company_profiles` ("demand side")** — profiles are
+  derived from **past TED award winners only** (`profile_builder`), so the supplier
+  pool is fixed and company-side attributes that award data lacks — chiefly
+  **certifications** — are absent. This is an **accepted V1 constraint (G14)**, and
+  it is *why* the certification disqualifier gate (G12), though fully wired to the
+  Understanding layer's extracted `required_certifications`, stays inert in
+  production: there is no company-cert data to gate against. The lift path is a
+  Phase-5 scraped/enriched profile source (which also activates G12). Per-portal
+  dossier scraping is deferred (see [Notes.md](Notes.md)).
+- **Frontend for awards / companies / agent + persisted weights (G15/G16)** — the
+  highest-value remaining band; APIs exist, the UI does not.
 - Authentication & multi-tenant separation — Phase 5.
 - Playwright E2E — install only when needed.
 - DeepL / translation — out of scope; multilingual handled by a multilingual

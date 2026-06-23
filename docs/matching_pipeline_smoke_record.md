@@ -360,3 +360,76 @@ v5's `notice_title+description` training and the company side's G6 text), and (b
 on tenders with generic titles the description carries most of the signal, so the
 lift there is bigger. No retrain / re-embed needed — tenders embed on-the-fly per
 match run.
+
+---
+
+## 2026-06-23 — Understanding layer (G11) + certification disqualifier gate (G12)
+
+- **What changed:** a real `FieldExtractor` (Claude enrich + deterministic
+  fallback) + `ExtractionValidator` + `understanding/service.py` persist a
+  structured `TenderProfile` to the new `tenders.tender_profile` JSONB (migration
+  `0013`). `MatchingPipeline.run` now feeds the extracted `required_certifications`
+  + each company's `company_profiles.certifications` into a **conservative** cert
+  gate (fires only on positive evidence a company lacks a required cert).
+- **Environment:** Docker `gtmagent-db-1` up; the **`gtm_test`** schema reset so
+  `create_all` picked up the new `tenders.tender_profile` column; full suite run
+  locally on the venv (`gtm_test`, no ML deps needed — extraction uses the offline
+  fallback, embeddings use the keyword fake).
+
+### Verification (test-suite, DB-backed)
+
+```
+266 passed  (was 246; +20)
+  tests/understanding/test_extractor.py ....   offline fallback + Claude(fake client) + bad-JSON fallback
+  tests/understanding/test_validator.py ....   CPV pad/short, sentinel+implausible budget drop, past-deadline flag, dedupe
+  tests/understanding/test_service.py ....     build_tender_text, persist fallback + claude meta, endpoint
+  tests/matching/test_disqualifier.py          unknown company certs → NOT gated; known-empty → gated
+  tests/matching/test_pipeline.py              cert gate: Holds=ok / Lacks(known)=disqualified / Unknown=pass ; NULL profile → no gate
+```
+
+The keystone behaviour — the cert gate against three companies on one tender —
+is asserted directly in `test_pipeline_cert_gate_uses_extracted_requirements`:
+a company that **holds** the required cert passes, one with a **known** cert set
+that **lacks** it is disqualified, and one with **no cert data** passes
+(conservative). A tender with `tender_profile = NULL` keeps column-only behaviour.
+
+### Offline-fallback sanity (no key)
+
+With no `ANTHROPIC_API_KEY`, `extract_and_store_tender_profile` returns a profile
+built purely from the tender columns (`_meta.source = "fallback"`,
+`validation_ok = true`), `required_certifications = []` → the cert gate is a no-op.
+This is the safe default the CI/test boot relies on.
+
+### Live dev-DB extraction smoke (2026-06-23, after `alembic upgrade head` → 0013)
+
+Ran `extract_and_store_tender_profile` against a real tender (dev `gtm` DB, valid
+`ANTHROPIC_API_KEY`, UTF-8 stdout, truststore SSL):
+
+```
+[tender] id=16 | DEU | "Germany – Landscaping work for sports grounds … Fredersdorfer Straße"
+[desc]   Herstellung einer 6.750 qm großen Schulsportaussenanlage: …  (German)
+
+[stored tender_profile]
+  source         : claude        validation_ok : True   issues=[]
+  cpv_code       : 45112720      language      : de
+  summary        : "…construction of a 6,750 sqm school sports outdoor facility in Berlin…"
+  required_certs : []            ← tender states none → model correctly returns [] (no hallucination)
+  required_caps  : [18 items]    ← e.g. "Installation of synthetic sports surface flooring (2,200 sqm)",
+                                   "perimeter fencing up to 2m (~171 lm)", "drainage channels…", "tree planting…"
+  keywords       : ["Schulsportaussenanlage", "Kunststoffbelag", "Ballfangzaun", "Drainage", …]
+[round-trip] tenders.tender_profile persisted: True   _meta.source: claude
+```
+
+**Interpretation — G11 live-verified (parallels the G10 live email verify):** the
+Claude path fired live and is **grounded** — it produced an accurate cross-lingual
+(German→English) summary + a detailed, faithful capability list from the German
+description, surfaced real domain keywords, kept the authoritative TED `cpv_code`,
+and — crucially — returned `required_certifications: []` because the notice states
+none, rather than inventing one. Validation passed clean; the profile round-trips
+to `tenders.tender_profile`.
+
+**G12 in production:** this tender (like the pool generally) lists no required
+certifications and no company carries cert data, so the gate is a correct no-op
+here — its firing behaviour is proven by the DB-backed tests above
+(`Holds/Lacks(known)/Unknown`). It activates in production once a company-cert
+data source exists (the G14 fixed-pool limitation).

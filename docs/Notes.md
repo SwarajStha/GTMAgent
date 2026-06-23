@@ -205,6 +205,51 @@ G15/G16 (frontend), G19/G20 (hygiene).
   matching runs, model fits) load it, and the one test that fits a real model is
   `importorskip`-guarded rather than forcing ML deps into CI.
 
+## 2026-06-23 — Pipeline completeness: Understanding layer + certification gate (G11/G12/G14)
+- **Trigger:** the "Pipeline completeness" band of the gap tracker — the last
+  structural stubs in the flow. G11 (no `FieldExtractor`) was blocking G12 (the
+  disqualifier's cert gate, which had always been fed empty lists).
+- **G11 — Understanding layer built.** `FieldExtractor.extract_tender` calls Claude
+  (evidence-constrained JSON, lazy + injectable client, mirroring the G10 email
+  drafter) to turn a tender's title + description + dossier text into a structured
+  `TenderProfile` — summary, **required certifications**, required capabilities,
+  keywords, language. Crucially the model only *enriches*: the trustworthy TED
+  columns (CPV/title/budget/country/deadline) are passed in as the authoritative
+  base and are the entire profile when no key is configured (deterministic
+  fallback). `ExtractionValidator` repairs CPV format, drops `-1/0`/implausible
+  budgets, flags past deadlines, dedupes list fields. `understanding.service`
+  orchestrates and persists the result to the new `tenders.tender_profile` JSONB
+  (migration `0013`) with a `_meta` provenance block. Surfaced as
+  `POST /tenders/{id}/extract` and an `extract_tender_profile` agent tool. It is an
+  **explicit opt-in step**, never run inside `MatchingPipeline.run`, so matching
+  stays cheap and deterministic (≤1 LLM call per tender, only when asked).
+- **G12 — cert gate wired, conservatively.** The pipeline now feeds the extracted
+  `required_certifications` and each company's `company_profiles.certifications`
+  into `Disqualifier.check`. The key design call: a hard gate must fire on evidence
+  of *absence*, not *absence of evidence*. So the gate disqualifies only when a
+  company's cert set is **known** (non-empty / explicitly flagged) and a required
+  cert is missing — never when we simply have no cert data. Without this, a tender
+  listing one required certification would disqualify the entire 15k-company pool
+  (none of which carry cert data from TED awards). Result: the gate is fully wired
+  and fires correctly in tests where a company has a known cert set, but is inert
+  in production until a company-cert data source exists — the same "wired but
+  data-limited" shape as G9's retrain.
+- **G14 — fixed pool documented.** The supplier pool is exactly past TED award
+  winners; company-side attributes award data lacks (chiefly certifications) are
+  absent, which is *why* the G12 gate is production-inert. Recorded as an accepted
+  V1 constraint in the tracker, `profile_builder`, and architecture docs; the lift
+  path is a Phase-5 enriched "demand side" profile source.
+- **Verified:** 246 → **266 tests** (+20: extractor fallback + Claude-via-fake-client,
+  validator repairs, DB-backed service/endpoint persistence, conservative
+  disqualifier semantics, pipeline cert gate with known/unknown/absent companies).
+  Ruff-clean on all new code; single Alembic head `0013`; offline-safe in CI via the
+  new `_offline_extractor` autouse fixture. **Migration `0013` applied** to the dev
+  DB, then **live-verified**: Claude extracted a grounded structured profile from a
+  real German landscaping tender (correct CPV `45112720`, German→English summary, a
+  faithful 18-item capability list, real keywords) and correctly returned
+  `required_certifications: []` because the notice states none — no hallucinated
+  cert (parallels the G10 live email verify). See `docs/matching_pipeline_smoke_record.md`.
+
 ---
 
 # Future Decisions (design rationale)

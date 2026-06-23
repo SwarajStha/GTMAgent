@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useTendersStore } from '@/stores/tenders'
+import { useMatchesStore } from '@/stores/matches'
+import { useEmailsStore } from '@/stores/emails'
 
 const navItems = [
   { to: '/', label: 'Command', short: 'CM' },
@@ -11,12 +15,28 @@ const navItems = [
   { to: '/agent', label: 'Agent', short: 'AG' },
 ]
 
-const pipelineSteps = [
-  { label: 'Ingest', value: 'Live' },
-  { label: 'Extract', value: 'Queued' },
-  { label: 'Match', value: 'Scored' },
-  { label: 'Draft', value: 'Review' },
-]
+// Chips + pipeline counts reflect actual store state (not fabricated constants).
+// Stores start on bundled sample data and swap to live API data once a view
+// loads it; the badge below says which the numbers reflect.
+const tendersStore = useTendersStore()
+const matchesStore = useMatchesStore()
+const emailsStore = useEmailsStore()
+
+const isLive = computed(
+  () => tendersStore.source === 'api' || matchesStore.source === 'api',
+)
+
+const headerChips = computed(() => [
+  { label: `${tendersStore.items.length} tenders`, cls: 'bg-sky-50 text-sky-700' },
+  { label: `${matchesStore.readyCount} ready matches`, cls: 'bg-emerald-50 text-emerald-700' },
+  { label: `${emailsStore.reviewCount} drafts to review`, cls: 'bg-amber-50 text-amber-700' },
+])
+
+const pipelineSteps = computed(() => [
+  { label: 'Tenders', value: tendersStore.items.length },
+  { label: 'Matches', value: matchesStore.items.length },
+  { label: 'Drafts', value: emailsStore.drafts.length },
+])
 </script>
 
 <template>
@@ -38,8 +58,11 @@ const pipelineSteps = [
             </span>
           </RouterLink>
 
-          <div class="hidden rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 sm:block">
-            Main synced
+          <div
+            class="hidden rounded-full px-3 py-1 text-xs font-bold sm:block"
+            :class="isLive ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'"
+          >
+            {{ isLive ? 'Live data' : 'Sample data' }}
           </div>
         </div>
 
@@ -104,9 +127,14 @@ const pipelineSteps = [
               </h1>
             </div>
             <div class="flex flex-wrap items-center gap-2 text-xs font-bold">
-              <span class="rounded-full bg-sky-50 px-3 py-1 text-sky-700">TED source active</span>
-              <span class="rounded-full bg-amber-50 px-3 py-1 text-amber-700">3 drafts pending</span>
-              <span class="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">4 matches scored</span>
+              <span
+                v-for="chip in headerChips"
+                :key="chip.label"
+                class="rounded-full px-3 py-1"
+                :class="chip.cls"
+              >
+                {{ chip.label }}
+              </span>
             </div>
           </div>
         </header>

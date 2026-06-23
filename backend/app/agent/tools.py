@@ -259,14 +259,13 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
 
     elif tool_name == "find_matches":
         try:
-            # Backend matching modules are scaffolded but pipeline is defined
             from app.matching.pipeline import MatchingPipeline
+
             tender_id = tool_args["tender_id"]
-            # top_n logic is usually handled inside or after run()
-            pipeline = MatchingPipeline()
-            # Requires pipeline.run to be fully implemented; the except below
-            # catches the NotImplementedError the current stub raises.
-            matches = pipeline.run(tender_id=tender_id)
+            top_n = tool_args.get("top_n")
+            # Run on the agent loop's session so the matches are written in the same
+            # transaction the agent is using (the pipeline commits internally).
+            matches = MatchingPipeline().run(tender_id=tender_id, session=session, top_n=top_n)
             return f"Matching complete for tender {tender_id}. {len(matches)} matches found."
         except Exception as e:
             return f"Error finding matches: {str(e)}"

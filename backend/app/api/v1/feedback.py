@@ -1,7 +1,10 @@
 """User feedback endpoints.
 
-Captures thumbs up/down ratings on matches and email drafts. The feedback
-loop feeds into the logistic-regression weight learner in Phase 5.
+Captures thumbs up/down ratings on matches and email drafts. Each rating snapshots
+the match's 10-feature vector (`feedback.features`) so it stays a durable training
+sample. `POST /feedback/retrain` (G8) fits the LR on those `(features, rating)`
+pairs and writes `model_params_feedback.json`, which the matching pipeline then
+serves in preference to the v5 base model.
 """
 from __future__ import annotations
 

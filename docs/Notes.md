@@ -298,15 +298,17 @@ G15/G16 (frontend), G19/G20 (hygiene).
 - **Verified:** backend **268 tests** still green (the hard-filter change is
   test-safe — verified each pipeline test's tiny pool falls through the filter),
   ruff-clean; frontend lint + build clean.
-- **Other review findings (logged, not fixed — low priority):** AppShell header
-  chips ("3 drafts pending", "4 matches scored", "TED source active") + the
-  "Pipeline" steps are hardcoded/stale (cosmetic; HomeView already shows live
-  metrics); the agent `find_matches` tool opens its own DB session instead of using
-  the loop's (works, slightly inconsistent); a few stale comments (`tools.py`
-  "NotImplementedError the current stub raises" — the pipeline is implemented;
-  `feedback.py` docstring "Phase 5" — G8 shipped); the generic `embeddings`
-  Vector(768) table is declared but has no producer/consumer (intentional
-  catch-all, see CLAUDE.md). None block anything.
+- **Other review findings — now fixed (low priority cleanup):** AppShell header
+  chips + "Pipeline" steps are now reactive to the stores (live tenders/ready-
+  matches/drafts counts + a Live/Sample data badge) instead of hardcoded constants;
+  the agent `find_matches` tool now runs on the agent loop's DB session (was opening
+  its own); stale comments corrected (`tools.py` no longer claims the pipeline is a
+  stub raising `NotImplementedError`; `feedback.py` docstring now describes the
+  shipped G8 retrain instead of "Phase 5"); the generic `embeddings` Vector(768)
+  table got an explicit **RESERVED / not-yet-wired** docstring (it's a deliberate
+  cross-model reservation, not a forgotten stub — keep empty or drop via migration).
+  All non-behavioural except the agent session change; 268 tests still green,
+  frontend lint + build clean.
 
 ---
 

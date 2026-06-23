@@ -324,6 +324,17 @@ class Feedback(Base, TimestampMixin):
 
 
 class Embedding(Base, TimestampMixin):
+    """RESERVED — generic cross-model vector store (768-dim). **Not yet wired.**
+
+    A deliberate schema reservation, not a forgotten stub: the live "hot path"
+    embedding is `company_profiles.embedding` (384-dim MiniLM). This table exists
+    so a second model's vectors (e.g. mpnet/e5, 768-dim) can be stored for any
+    source row (`source_type` + `source_id`) without changing the hot-path column's
+    dimension. No producer or consumer references it today — keep it empty until a
+    cross-model embedding feature actually needs it (then add the writer/reader),
+    or drop it via a migration if that direction is abandoned.
+    """
+
     __tablename__ = "embeddings"
 
     id: Mapped[uuid.UUID] = mapped_column(

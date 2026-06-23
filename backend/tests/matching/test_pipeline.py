@@ -204,6 +204,49 @@ def test_pipeline_lr_mode_populates_feature_columns(db_session) -> None:
     assert any(m.cpv_4digit_score == 0.0 for m in matches)  # the IT company
 
 
+def test_pipeline_cert_gate_uses_extracted_requirements(db_session) -> None:
+    # G11→G12: a tender's extracted required_certifications drive the cert gate,
+    # but only against companies whose certs are *known*.
+    embedder = _KeywordEmbedder()
+    tender = _tender(
+        tender_profile={"required_certifications": ["ISO 27001"], "_meta": {"source": "claude"}}
+    )
+    db_session.add(tender)
+    db_session.flush()
+
+    holds = _profile("Holds ISO", "parquet floor", embedder, cpv_codes=["45000000"])
+    holds.certifications = {"items": ["ISO 27001"], "known": True}
+    lacks = _profile("Lacks ISO", "parquet floor", embedder, cpv_codes=["45000000"])
+    lacks.certifications = {"items": ["ISO 9001"], "known": True}
+    unknown = _profile("Unknown Co", "parquet floor", embedder, cpv_codes=["45000000"])
+    # unknown.certifications stays None → no cert data on file
+    db_session.add_all([holds, lacks, unknown])
+    db_session.flush()
+
+    results = MatchingPipeline(embedder=embedder, use_lr=False).run(tender.id, session=db_session)
+    by_name = {r["company_name"]: r for r in results}
+
+    assert by_name["Lacks ISO"]["is_disqualified"] is True       # known + missing → gated
+    assert by_name["Holds ISO"]["is_disqualified"] is False      # known + holds → ok
+    assert by_name["Unknown Co"]["is_disqualified"] is False     # unknown → conservative pass
+
+
+def test_pipeline_no_profile_means_no_cert_gate(db_session) -> None:
+    # A tender that was never run through extraction (tender_profile NULL) keeps
+    # the column-only behaviour — the cert gate stays inert.
+    embedder = _KeywordEmbedder()
+    tender = _tender()  # no tender_profile
+    db_session.add(tender)
+    db_session.flush()
+    co = _profile("Some Co", "parquet floor", embedder, cpv_codes=["45000000"])
+    co.certifications = {"items": ["ISO 9001"], "known": True}
+    db_session.add(co)
+    db_session.flush()
+
+    results = MatchingPipeline(embedder=embedder, use_lr=False).run(tender.id, session=db_session)
+    assert results[0]["is_disqualified"] is False
+
+
 def test_pipeline_rematch_deletes_dependent_emails(db_session) -> None:
     # Regression for G26: re-matching a tender whose match was turned into an
     # email must not hit emails_match_id_fkey on the idempotent DELETE.

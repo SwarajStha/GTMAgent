@@ -96,11 +96,50 @@ class MatchingPipeline:
         return [str(c) for c in (tender.cpv_codes or [])]
 
     @staticmethod
-    def _tender_terms(tender: Tender) -> list[str]:
+    def _tender_profile(tender: Tender) -> dict[str, Any]:
+        """The structured Understanding-layer output stored on the tender (G11),
+        or ``{}`` when the tender has not been run through extraction yet."""
+        profile = getattr(tender, "tender_profile", None)
+        return profile if isinstance(profile, dict) else {}
+
+    @classmethod
+    def _tender_required_certs(cls, tender: Tender) -> list[str]:
+        """Required certifications extracted by the Understanding layer (G11/G12).
+        Empty when no profile is stored — the cert gate then stays inert."""
+        certs = cls._tender_profile(tender).get("required_certifications") or []
+        return [str(c).strip() for c in certs if str(c).strip()]
+
+    @classmethod
+    def _tender_terms(cls, tender: Tender) -> list[str]:
         terms: list[str] = [str(c) for c in (tender.cpv_codes or [])]
         if tender.title:
             terms.append(tender.title)
+        # Fold in the Understanding layer's required capabilities + keywords (G11)
+        # so the legacy qualification scorer matches against real requirements,
+        # not just the CPV code + title. (LR mode does not use rule terms; the
+        # extracted certs feed its disqualifier gate instead.)
+        profile = cls._tender_profile(tender)
+        for key in ("required_capabilities", "keywords"):
+            terms.extend(str(t).strip() for t in (profile.get(key) or []) if str(t).strip())
         return terms
+
+    @staticmethod
+    def _company_certs(company: CompanyProfile) -> tuple[list[str], bool]:
+        """Return ``(certifications, known)`` for a company profile.
+
+        The `company_profiles.certifications` JSONB is either a bare list or a
+        ``{"items": [...], "known": bool}`` dict. `known` distinguishes "we
+        checked and it holds none" from the MVP default "we have no cert data" —
+        the disqualifier only gates on the former (see `Disqualifier.check`)."""
+        raw = company.certifications
+        if isinstance(raw, dict):
+            items = [str(x).strip() for x in (raw.get("items") or []) if str(x).strip()]
+            known = bool(raw.get("known")) if raw.get("known") is not None else bool(items)
+            return items, known
+        if isinstance(raw, list):
+            items = [str(x).strip() for x in raw if str(x).strip()]
+            return items, bool(items)
+        return [], False
 
     # ── legacy fixed-weight combine ──────────────────────────────────────────
 
@@ -203,6 +242,10 @@ class MatchingPipeline:
             tender_vec = self.embedder.embed(self._tender_text(session, tender))
             tender_cpvs = self._tender_cpvs(tender)
             tender_terms = self._tender_terms(tender)
+            # Certifications the Understanding layer extracted for this tender
+            # (G11). Empty unless the tender was run through extraction → the cert
+            # gate (G12) then stays inert (no structured requirement to enforce).
+            required_certs = self._tender_required_certs(tender)
             # Convert the tender budget to EUR (G7). `budget_eur` is misnamed —
             # it's denominated in `tender.currency`; default missing currency to
             # EUR. Company deal sizes are already EUR (derive_deal_size), so this
@@ -230,10 +273,12 @@ class MatchingPipeline:
             for company in candidates:
                 caps = company.capabilities or {}
                 deal = caps.get("deal_size_eur") or {}
+                company_certs, certs_known = self._company_certs(company)
                 disqualified, reasons = self.disqualifier.check(
                     tender_budget_eur=tender_eur,
-                    required_certifications=[],  # MVP: tenders lack structured cert reqs
-                    company_certifications=[],
+                    required_certifications=required_certs,
+                    company_certifications=company_certs,
+                    company_certifications_known=certs_known,
                     deal_max=deal.get("max"),
                 )
 

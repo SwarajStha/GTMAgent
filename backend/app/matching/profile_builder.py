@@ -13,6 +13,15 @@ budget/location/qualification rule scores carry most of the early signal.
 
 `source_company_id` is the idempotent upsert key, so re-running updates rather
 than duplicates.
+
+**Known limitation — fixed supplier pool (G14).** The pool is exactly the set of
+companies that have won a past TED award; a company that never won a listed award
+can never surface as a match. Company-side attributes that award data does not
+carry — notably **certifications** (the input the G12 disqualifier gate needs) —
+are therefore absent here, which is why that gate is inert in production until a
+richer data source exists. This is an accepted V1 constraint; the lift path is a
+Phase-5 scraped/enriched "demand side" profile source (which would also populate
+`CompanyProfile.certifications`).
 """
 from __future__ import annotations
 

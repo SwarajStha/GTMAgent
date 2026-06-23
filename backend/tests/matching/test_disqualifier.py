@@ -54,3 +54,26 @@ def test_budget_within_threshold_is_ok() -> None:
 def test_missing_budget_or_dealmax_does_not_gate() -> None:
     assert Disqualifier().check(tender_budget_eur=None, deal_max=500_000) == (False, [])
     assert Disqualifier().check(tender_budget_eur=9_000_000, deal_max=None) == (False, [])
+
+
+def test_unknown_company_certs_never_disqualify() -> None:
+    # G12 conservative rule: absence of company cert data is NOT evidence of
+    # absence — a tender that requires a cert must not nuke companies we simply
+    # have no cert data for.
+    ok, reasons = Disqualifier().check(
+        required_certifications=["ISO 27001"],
+        company_certifications=[],  # unknown (MVP default)
+    )
+    assert ok is False
+    assert reasons == []
+
+
+def test_explicitly_known_empty_certs_do_disqualify() -> None:
+    # If we positively know the company holds no certs, the gate fires.
+    ok, reasons = Disqualifier().check(
+        required_certifications=["ISO 27001"],
+        company_certifications=[],
+        company_certifications_known=True,
+    )
+    assert ok is True
+    assert any("certification" in r for r in reasons)

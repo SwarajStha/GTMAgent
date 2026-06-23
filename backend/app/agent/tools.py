@@ -53,6 +53,26 @@ AGENT_TOOLS = [
         }
     },
     {
+        "name": "extract_tender_profile",
+        "description": (
+            "Run the Understanding layer on a tender: extract a structured "
+            "profile (summary, required certifications, required capabilities, "
+            "keywords) from its text and store it on the tender. The extracted "
+            "certifications drive the matcher's certification gate. Run this "
+            "before find_matches when you want certification-aware matching."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tender_id": {
+                    "type": "integer",
+                    "description": "The integer primary key of the tender (tenders.id)."
+                }
+            },
+            "required": ["tender_id"]
+        }
+    },
+    {
         "name": "find_matches",
         "description": (
             "Run the matching pipeline for a given tender to find the top "
@@ -216,6 +236,26 @@ def dispatch_tool(tool_name: str, tool_args: dict, session, dry_run: bool = True
             return f"Dossier download sweep {verb} triggered (run state: {summary})"
         except Exception as e:
             return f"Error downloading dossiers: {str(e)}"
+
+    elif tool_name == "extract_tender_profile":
+        try:
+            from app.db.models import Tender
+            from app.understanding.service import extract_and_store_tender_profile
+
+            tender_id = tool_args["tender_id"]
+            tender = session.get(Tender, tender_id)
+            if tender is None:
+                return f"No tender found for id {tender_id}."
+            stored = extract_and_store_tender_profile(session, tender)
+            meta = stored.get("_meta", {})
+            certs = stored.get("required_certifications") or []
+            return (
+                f"Extracted profile for tender {tender_id} "
+                f"(source={meta.get('source')}, validation_ok={meta.get('validation_ok')}). "
+                f"Required certifications: {certs or 'none stated'}."
+            )
+        except Exception as e:
+            return f"Error extracting tender profile: {str(e)}"
 
     elif tool_name == "find_matches":
         try:

@@ -58,6 +58,17 @@ def _offline_email_drafter(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _offline_extractor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the Understanding-layer field extractor offline across the suite
+    (deterministic fallback), even with a real ANTHROPIC_API_KEY in `.env`. Tests
+    that exercise the Claude path inject a fake client into `FieldExtractor`,
+    which bypasses this gate (the gate only applies when no client was supplied)."""
+    import app.understanding.extractor as extractor
+
+    monkeypatch.setattr(extractor, "_llm_available", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _offline_reflector(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the reflection-loop narrative offline across the suite (deterministic
     path), even with a real ANTHROPIC_API_KEY in `.env`. Tests that exercise the

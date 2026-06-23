@@ -40,6 +40,14 @@ class TenderDetailOut(TenderOut):
     """Single-tender response, including raw TED payload for inspection."""
 
     raw_json: dict[str, Any]
+    tender_profile: dict[str, Any] | None = None
+
+
+class TenderProfileOut(BaseModel):
+    """Response of the Understanding-layer extraction endpoint."""
+
+    tender_id: int
+    profile: dict[str, Any]
 
 
 class TenderListOut(BaseModel):
@@ -118,3 +126,33 @@ def get_tender(tender_id: str, db: Annotated[Session, Depends(get_db)]) -> Tende
         raise HTTPException(status_code=404, detail="Tender not found")
 
     return TenderDetailOut.model_validate(tender)
+
+
+def _resolve_tender(db: Session, tender_id: str) -> Tender:
+    stmt = sa.select(Tender)
+    if tender_id.isdigit():
+        stmt = stmt.where(Tender.id == int(tender_id))
+    else:
+        stmt = stmt.where(Tender.ted_notice_id == tender_id)
+    tender = db.scalars(stmt).first()
+    if tender is None:
+        raise HTTPException(status_code=404, detail="Tender not found")
+    return tender
+
+
+@router.post("/{tender_id}/extract")
+def extract_tender_profile(
+    tender_id: str, db: Annotated[Session, Depends(get_db)]
+) -> TenderProfileOut:
+    """Run the Understanding layer (G11) on one tender and persist the structured
+    `TenderProfile` to `tenders.tender_profile`.
+
+    Uses Claude when `ANTHROPIC_API_KEY` is configured, else a deterministic
+    fallback built from the tender's own columns — so it always returns a profile.
+    The stored `required_certifications` subsequently drive the matcher's cert
+    gate (G12). Safe to call repeatedly (re-extracts and overwrites)."""
+    from app.understanding.service import extract_and_store_tender_profile
+
+    tender = _resolve_tender(db, tender_id)
+    stored = extract_and_store_tender_profile(db, tender)
+    return TenderProfileOut(tender_id=tender.id, profile=stored)

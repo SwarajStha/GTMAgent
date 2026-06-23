@@ -71,6 +71,12 @@ class Tender(Base):
     is_restricted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )
+    # Structured Understanding-layer output (migration 0013). A JSON copy of the
+    # extracted `TenderProfile` plus a `_meta` block (source/model/validation).
+    # NULL until the tender has been run through `understanding.service`. The
+    # matcher reads `required_certifications` from here to drive the cert gate
+    # (G11/G12); absent → the matcher keeps its column-only behaviour.
+    tender_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     raw_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

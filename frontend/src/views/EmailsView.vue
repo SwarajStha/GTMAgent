@@ -175,6 +175,25 @@ function approveDraft() {
                 >
                   {{ selectedDraft.recipientType === 'buyer' ? 'Buyer outreach' : 'Supplier outreach' }}
                 </span>
+                <span
+                  v-if="selectedDraft.recipientType !== 'buyer' && selectedDraft.recipientVerified === false"
+                  class="badge bg-amber-50 text-amber-700"
+                  title="Derived from the company website — confirm before sending"
+                >
+                  unverified contact
+                </span>
+              </p>
+              <p
+                v-if="selectedDraft.recipientType !== 'buyer' && selectedDraft.companyWebsite"
+                class="mt-1 text-xs font-semibold text-slate-400"
+              >
+                Find the real contact at
+                <a
+                  :href="selectedDraft.companyWebsite"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-emerald-700 underline"
+                >{{ selectedDraft.companyWebsite }}</a>
               </p>
             </div>
             <div class="flex flex-wrap gap-2">

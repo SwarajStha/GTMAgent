@@ -67,9 +67,22 @@ function toEvidenceItems(email: ApiEmail): string[] {
   ].slice(0, 4)
 }
 
-function recipientFor(company: ApiEmailContextCompany): string {
-  const website = company.website?.replace(/^https?:\/\//, '').replace(/\/$/, '')
-  return website ? `sales@${website}` : 'sales@example.com'
+// G17b: we hold no verified supplier contact. Derive a *candidate* address from
+// the company website and flag it as unverified, rather than fabricating an
+// authoritative-looking `sales@…` (and never invent one when there is no site).
+function supplierContact(company: ApiEmailContextCompany): {
+  recipient: string
+  verified: boolean
+  website: string | null
+} {
+  const domain = company.website
+    ?.replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/\/$/, '')
+  if (domain) {
+    return { recipient: `info@${domain}`, verified: false, website: company.website ?? null }
+  }
+  return { recipient: 'No verified contact on file', verified: false, website: null }
 }
 
 function toEmailDraft(email: ApiEmail): EmailDraft {
@@ -82,13 +95,16 @@ function toEmailDraft(email: ApiEmail): EmailDraft {
         explanation: s.explanation,
       }))
     : undefined
+  const supplier = isBuyer ? null : supplierContact(email.company)
   return {
     id: email.id,
     matchId: email.match_id,
     subject: email.subject,
-    recipient: isBuyer
-      ? email.tender.buyer_name ?? 'public buyer'
-      : recipientFor(email.company),
+    recipient: isBuyer ? email.tender.buyer_name ?? 'public buyer' : supplier!.recipient,
+    // Buyer outreach targets the real TED-published buyer org; supplier contacts
+    // are website-derived guesses (we hold no verified email).
+    recipientVerified: isBuyer,
+    companyWebsite: isBuyer ? null : supplier!.website,
     companyName: isBuyer
       ? email.tender.buyer_name ?? email.tender.title ?? email.tender.ted_notice_id
       : email.company.name,

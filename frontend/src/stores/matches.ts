@@ -57,9 +57,22 @@ interface ApiMatchList {
 
 type FeedbackRating = 1 | -1
 
+export interface MatchWeights {
+  semantic: number
+  budget: number
+  location: number
+  qualification: number
+}
+
+// The unified pipeline writes a calibrated LR win-probability as final_score,
+// which tops out around ~0.8 for strong matches (see the smoke records) — the
+// previous 0.8 "ready" cut-off therefore almost never fired. 0.6 marks a
+// genuinely strong match while still separating the long tail of weak ones.
+const READY_SCORE = 0.6
+
 function toMatchStatus(match: ApiMatch): MatchItem['status'] {
   if (match.is_disqualified) return 'blocked'
-  return match.final_score >= 0.8 ? 'ready' : 'needs-review'
+  return match.final_score >= READY_SCORE ? 'ready' : 'needs-review'
 }
 
 function toEvidence(match: ApiMatch): string[] {
@@ -127,20 +140,30 @@ export const useMatchesStore = defineStore('matches', {
         this.loading = false
       }
     },
-    async runMatching(tenderId: string, topN?: number) {
+    async runMatching(tenderId: string, topN?: number, weights?: MatchWeights) {
       this.loading = true
       this.error = null
       try {
         const query = topN ? `?top_n=${topN}` : ''
-        const response = await fetch(`/api/v1/matches/run/${tenderId}${query}`, {
-          method: 'POST',
-        })
+        // G16: when the operator supplies weights, post them so the backend
+        // re-ranks in weighted mode and persists the choice (otherwise the
+        // default trained-LR scorer runs with no body).
+        const init: RequestInit = weights
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(weights),
+            }
+          : { method: 'POST' }
+        const response = await fetch(`/api/v1/matches/run/${tenderId}${query}`, init)
         if (!response.ok) {
           throw new Error(`Run matching returned ${response.status}`)
         }
+        const result = (await response.json()) as { mode: string }
         // Refresh the full match list so the new rows show up in the view.
         await this.fetchAll()
         this.source = 'api'
+        return result.mode
       } catch (error) {
         this.error = error instanceof Error ? error.message : 'Run matching failed'
         throw error

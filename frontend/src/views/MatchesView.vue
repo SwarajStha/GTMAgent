@@ -121,10 +121,23 @@ async function findMatches() {
   if (tenderFilter.value === 'all') return
   actionMessage.value = ''
   try {
-    await matchesStore.runMatching(tenderFilter.value)
-    actionMessage.value = 'Matching complete — ranked suppliers updated'
+    const mode = await matchesStore.runMatching(tenderFilter.value)
+    actionMessage.value = `Matching complete (${mode === 'weighted' ? 'weighted' : 'trained model'}) — ranked suppliers updated`
   } catch {
     actionMessage.value = matchesStore.error ?? 'Run matching failed'
+  }
+}
+
+async function applyWeights() {
+  // G16: persist the operator's slider weights — re-rank server-side in weighted
+  // mode and reload, so the override is durable (not just a client-side preview).
+  if (tenderFilter.value === 'all') return
+  actionMessage.value = ''
+  try {
+    await matchesStore.runMatching(tenderFilter.value, undefined, { ...weights.value })
+    actionMessage.value = 'Weights applied — tender re-ranked and saved'
+  } catch {
+    actionMessage.value = matchesStore.error ?? 'Apply weights failed'
   }
 }
 
@@ -200,7 +213,7 @@ async function submitFeedback(rating: 1 | -1) {
         <div class="flex items-center justify-between gap-3">
           <div>
             <p class="section-kicker">Weight sliders</p>
-            <h3 class="mt-1 text-sm font-black text-slate-950">Client-side recompute</h3>
+            <h3 class="mt-1 text-sm font-black text-slate-950">Live preview + saved re-rank</h3>
           </div>
           <button class="btn-secondary h-8 px-3 text-xs" type="button" @click="resetWeights">
             Reset
@@ -235,6 +248,23 @@ async function submitFeedback(rating: 1 | -1) {
             </span>
             <input v-model.number="weights.qualification" class="mt-2 w-full" type="range" min="0" max="1" step="0.05">
           </label>
+        </div>
+        <div class="mt-4 border-t border-slate-100 pt-4">
+          <button
+            class="btn-primary h-9 w-full px-3 text-xs"
+            type="button"
+            :disabled="tenderFilter === 'all' || matchesStore.loading"
+            @click="applyWeights"
+          >
+            {{ matchesStore.loading ? 'Re-ranking…' : 'Apply weights & re-rank (save)' }}
+          </button>
+          <p class="mt-2 text-xs font-semibold leading-5 text-slate-500">
+            {{
+              tenderFilter === 'all'
+                ? 'Select a tender above to save weighted re-ranking. Sliders preview live for any view.'
+                : 'Saves these weights and re-ranks this tender server-side (weighted mode). Re-run “Find matches” for the trained model.'
+            }}
+          </p>
         </div>
       </div>
 

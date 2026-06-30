@@ -394,6 +394,34 @@ class AgentSession(Base, TimestampMixin):
     run_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
+class TenderReport(Base, TimestampMixin):
+    """A saved agent analysis for a tender (migration 0015).
+
+    The agent's ranked top-N + narrative is otherwise transient (it lives only in
+    the streamed output). This persists it, keyed to the tender, so the user can
+    come back to it. `suppliers` is a self-contained snapshot of the ranked
+    matches taken at save time — it survives a later re-match (same durability
+    lesson as `feedback.features`). History is kept (many rows per tender).
+    """
+    __tablename__ = "tender_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tender_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tenders.id"), nullable=False, index=True
+    )
+    # Provenance: which agent session produced this report (nullable — a report
+    # can be saved without an agent session, and the session may be pruned).
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_sessions.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    suppliers: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+
 class Reflection(Base, TimestampMixin):
     """One row per reflection cycle (`Reflector.reflect`, migration 0011 / G9).
 

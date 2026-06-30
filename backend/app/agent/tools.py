@@ -235,28 +235,36 @@ def _fmt_tender(tender) -> str:
     title = tender.title or "(no title)"
     country = tender.buyer_country or "?"
     deadline = tender.deadline.date().isoformat() if tender.deadline else "n/a"
-    return f"- id={tender.id} | {title} | {country} | deadline={deadline}"
+    # Lead with the public TED notice id (the human-facing identifier). `tender_id`
+    # is the internal handle the model passes to find_matches — keep it OUT of any
+    # user-facing label (ask_user options) per the UI convention.
+    return (
+        f"- TED {tender.ted_notice_id} | {title} | {country} | deadline={deadline} "
+        f"(tender_id={tender.id})"
+    )
 
 
 def _find_tender(session, query: str) -> str:
-    """Local tender lookup by id or title text. Read-only, no network."""
+    """Local tender lookup by internal id, TED notice id, or title text. No network."""
     import sqlalchemy as sa
 
     from app.db.models import Tender
 
     if not query:
-        return "Provide a tender id or words from its title to search for."
+        return "Provide a tender id, TED notice id, or words from its title."
 
-    # A purely numeric query is treated as an id first.
+    # A purely numeric query is treated as the internal id first.
     if query.isdigit():
         hit = session.get(Tender, int(query))
         if hit is not None:
             return "Found 1 tender:\n" + _fmt_tender(hit)
 
+    # Match the public TED notice id (e.g. '420398-2026') or words in the title.
+    like = f"%{query}%"
     rows = list(
         session.scalars(
             sa.select(Tender)
-            .where(Tender.title.ilike(f"%{query}%"))
+            .where(sa.or_(Tender.ted_notice_id.ilike(like), Tender.title.ilike(like)))
             .order_by(Tender.id.desc())
             .limit(_FIND_TENDER_LIMIT)
         ).all()
@@ -272,7 +280,9 @@ def _find_tender(session, query: str) -> str:
     body = "\n".join(_fmt_tender(t) for t in rows)
     return (
         f"Found {len(rows)} possible tenders for '{query}'. Use ask_user to let the "
-        f"user pick one (pass each id as an option):\n{body}"
+        "user pick one — set each option's `id` to the tender_id and its `label` to "
+        f"the TED notice id + title (do NOT put the internal tender_id in the label):"
+        f"\n{body}"
     )
 
 

@@ -1,6 +1,7 @@
 """Tender list and detail endpoints."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -10,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.db.models import Tender
+from app.db.models import CompanyProfile, Match, Tender, TenderReport
 
 router = APIRouter()
 
@@ -156,3 +157,101 @@ def extract_tender_profile(
     tender = _resolve_tender(db, tender_id)
     stored = extract_and_store_tender_profile(db, tender)
     return TenderProfileOut(tender_id=tender.id, profile=stored)
+
+
+# ── Saved agent analyses (tender_reports, migration 0015) ────────────────────
+
+class TenderReportIn(BaseModel):
+    """Request to save an agent analysis for a tender.
+
+    The structured supplier snapshot is built server-side from the tender's
+    current `matches` (authoritative), so the client only sends the narrative.
+    """
+
+    narrative: str
+    goal: str | None = None
+    session_id: uuid.UUID | None = None
+
+
+class TenderReportOut(BaseModel):
+    id: uuid.UUID
+    tender_id: int
+    session_id: uuid.UUID | None
+    goal: str | None
+    narrative: str
+    suppliers: list[dict[str, Any]] | None
+    created_at: datetime
+
+
+def _report_out(report: TenderReport) -> TenderReportOut:
+    return TenderReportOut(
+        id=report.id,
+        tender_id=report.tender_id,
+        session_id=report.session_id,
+        goal=report.goal,
+        narrative=report.narrative,
+        suppliers=report.suppliers,
+        created_at=report.created_at,
+    )
+
+
+def _supplier_snapshot(db: Session, tender_id: int, top_n: int = 5) -> list[dict[str, Any]]:
+    """Snapshot the tender's current top-N (non-disqualified) matches."""
+    rows = db.execute(
+        sa.select(Match, CompanyProfile)
+        .join(CompanyProfile, Match.company_id == CompanyProfile.id)
+        .where(Match.tender_id == tender_id)
+        .where(Match.is_disqualified.is_(False))
+        .order_by(Match.final_score.desc())
+        .limit(max(1, top_n))
+    ).tuples().all()
+    return [
+        {
+            "match_id": str(match.id),
+            "company_id": str(company.id),
+            "company_name": company.name,
+            "final_score": match.final_score,
+            "semantic_score": match.semantic_score,
+            "budget_score": match.budget_score,
+            "location_score": match.location_score,
+            "qualification_score": match.qualification_score,
+        }
+        for match, company in rows
+    ]
+
+
+@router.post("/{tender_id}/reports")
+def save_tender_report(
+    tender_id: str,
+    payload: TenderReportIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> TenderReportOut:
+    """Persist an agent analysis (narrative + a snapshot of the current ranked
+    matches) for a tender. History is kept — each call appends a new report."""
+    tender = _resolve_tender(db, tender_id)
+    report = TenderReport(
+        tender_id=tender.id,
+        session_id=payload.session_id,
+        goal=payload.goal,
+        narrative=payload.narrative,
+        suppliers=_supplier_snapshot(db, tender.id),
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return _report_out(report)
+
+
+@router.get("/{tender_id}/reports")
+def list_tender_reports(
+    tender_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[TenderReportOut]:
+    """List saved analyses for a tender, newest first."""
+    tender = _resolve_tender(db, tender_id)
+    reports = db.scalars(
+        sa.select(TenderReport)
+        .where(TenderReport.tender_id == tender.id)
+        .order_by(TenderReport.created_at.desc())
+    ).all()
+    return [_report_out(r) for r in reports]

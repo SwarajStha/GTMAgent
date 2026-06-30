@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useTendersStore } from '@/stores/tenders'
 import type { TenderItem } from '@/stores/sampleData'
 
@@ -79,6 +79,15 @@ const selectedSections = computed(
       evaluationCriteria: ['No evaluation criteria have been extracted yet.'],
       documentStatus: 'No document status available',
     },
+)
+
+// Load the selected tender's saved agent analyses (G28 viewer).
+watch(
+  () => selectedTender.value?.id,
+  (id) => {
+    if (id) void tendersStore.fetchReports(id)
+  },
+  { immediate: true },
 )
 
 const sectionPanels = computed(() => [
@@ -227,6 +236,15 @@ function fitClasses(fit: TenderItem['fitSignal']) {
         </dl>
 
         <div class="mt-5">
+          <p class="text-sm font-black text-slate-700">TED notice ID</p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <span class="badge bg-white text-slate-600 ring-1 ring-slate-200">
+              {{ selectedTender.tedNoticeId }}
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-5">
           <p class="text-sm font-black text-slate-700">CPV codes</p>
           <div class="mt-2 flex flex-wrap gap-2">
             <span
@@ -244,6 +262,41 @@ function fitClasses(fit: TenderItem['fitSignal']) {
           <p class="mt-2 text-sm font-bold leading-6 text-slate-700">
             {{ selectedSections.documentStatus }}
           </p>
+        </div>
+
+        <div class="mt-5">
+          <p class="text-sm font-black text-slate-700">Saved analyses</p>
+          <p v-if="tendersStore.reportsLoading" class="mt-2 text-xs font-semibold text-slate-400">
+            Loading…
+          </p>
+          <p
+            v-else-if="!tendersStore.reports.length"
+            class="mt-2 text-xs font-semibold text-slate-400"
+          >
+            No saved analyses yet. Run the Agent and click “Save results”.
+          </p>
+          <div v-else class="mt-2 space-y-2">
+            <details
+              v-for="report in tendersStore.reports"
+              :key="report.id"
+              class="rounded border border-slate-200 bg-slate-50 p-3"
+            >
+              <summary class="cursor-pointer text-xs font-bold text-slate-600">
+                {{ dateFormat.format(new Date(report.createdAt)) }} ·
+                {{ report.suppliers.length }} suppliers
+              </summary>
+              <div class="mt-2 flex flex-wrap gap-1.5">
+                <span
+                  v-for="(s, i) in report.suppliers.slice(0, 3)"
+                  :key="i"
+                  class="badge bg-white text-slate-600 ring-1 ring-slate-200"
+                >
+                  {{ s.companyName }} · {{ Math.round(s.finalScore * 100) }}%
+                </span>
+              </div>
+              <p class="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-slate-600">{{ report.narrative }}</p>
+            </details>
+          </div>
         </div>
       </aside>
     </section>

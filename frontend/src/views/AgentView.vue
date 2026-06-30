@@ -12,6 +12,10 @@ function pretty(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function medal(index: number) {
+  return ['🥇', '🥈', '🥉'][index] ?? `#${index + 1}`
+}
+
 async function run() {
   try {
     await agentStore.runAgent(goal.value, dryRun.value)
@@ -56,8 +60,12 @@ async function reflect() {
         />
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-600">
           <input v-model="dryRun" type="checkbox">
-          Dry run (no live TED calls — caged ingest tools report only)
+          Offline mode — only use already-ingested data (no live TED fetch)
         </label>
+        <p class="mt-1 text-xs font-semibold leading-5 text-slate-400">
+          Uncheck to let the agent fetch from live TED only if the tender or supplier pool is
+          missing. Matching still runs either way.
+        </p>
         <button class="btn-primary mt-4 w-full" type="button" :disabled="agentStore.runLoading" @click="run">
           {{ agentStore.runLoading ? 'Running…' : 'Run agent' }}
         </button>
@@ -174,6 +182,53 @@ async function reflect() {
 
         <p v-if="agentStore.run.output" class="mt-5 text-xs font-black uppercase tracking-[0.14em] text-slate-400">Output</p>
         <p v-if="agentStore.run.output" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{{ agentStore.run.output }}</p>
+
+        <!-- Post-run actions: save the analysis + draft an email to a chosen match. -->
+        <div
+          v-if="agentStore.resultTenderId && agentStore.run.output"
+          class="mt-6 border-t border-slate-200 pt-5"
+        >
+          <p class="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Actions</p>
+
+          <div class="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              class="btn-secondary"
+              type="button"
+              :disabled="agentStore.reportSaving || agentStore.reportSaved"
+              @click="agentStore.saveReport()"
+            >
+              {{ agentStore.reportSaved ? 'Results saved ✓' : agentStore.reportSaving ? 'Saving…' : 'Save results' }}
+            </button>
+            <span v-if="agentStore.reportSaved" class="text-xs font-semibold text-slate-500">
+              Saved to this tender's history.
+            </span>
+          </div>
+
+          <div v-if="agentStore.topMatches.length" class="mt-4">
+            <p class="text-sm font-black text-slate-700">Draft outreach email to:</p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button
+                v-for="(m, i) in agentStore.topMatches"
+                :key="m.matchId"
+                type="button"
+                class="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-50"
+                :disabled="!!agentStore.emailDraftingId"
+                @click="agentStore.draftEmail(m.matchId, m.companyName)"
+              >
+                {{ medal(i) }} {{ m.companyName }}
+                <span v-if="agentStore.emailDraftingId === m.matchId"> — drafting…</span>
+              </button>
+            </div>
+            <p v-if="agentStore.emailDraftedFor" class="mt-3 text-xs font-bold text-emerald-600">
+              Email written with {{ agentStore.emailDraftedFor.company }} —
+              <router-link to="/emails" class="underline">view in Emails</router-link>
+            </p>
+          </div>
+
+          <p v-if="agentStore.actionError" class="mt-3 text-xs font-bold text-amber-600">
+            {{ agentStore.actionError }}
+          </p>
+        </div>
       </article>
 
       <article v-if="agentStore.reflection" class="surface p-5">

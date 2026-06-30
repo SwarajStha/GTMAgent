@@ -11,8 +11,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_db
-from app.api.v1.emails import generate_email, get_email
-from app.db.models import CompanyProfile, Document, Match, Tender
+from app.api.v1.emails import generate_email, get_email, list_emails
+from app.db.models import CompanyProfile, Document, Email, Match, Tender
 from app.main import app
 
 MATCH_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -243,3 +243,36 @@ def test_generate_email_writes_real_draft(db_session) -> None:
     snippets = response.evidence["document_snippets"]
     assert snippets[0]["filename"] == "notice.pdf"
     assert "digital permitting" in snippets[0]["snippet"]
+
+
+def test_list_emails_returns_stored_drafts(db_session) -> None:
+    """The Emails screen list endpoint must return real stored drafts (it had
+    none before, so the UI fell back to sample data)."""
+    tender = Tender(
+        ted_notice_id="EM-LIST-1",
+        title="List tender",
+        cpv_codes=["45000000"],
+        raw_json={"source": "test"},
+    )
+    company = CompanyProfile(name="MailCo", country="DE")
+    db_session.add_all([tender, company])
+    db_session.flush()
+    match = Match(tender_id=tender.id, company_id=company.id, final_score=0.7)
+    db_session.add(match)
+    db_session.flush()
+    email = Email(
+        match_id=match.id,
+        tender_id=tender.id,
+        recipient_type="supplier",
+        subject="Hello supplier",
+        body="Body text",
+        status="draft",
+    )
+    db_session.add(email)
+    db_session.flush()
+
+    result = list_emails(db=db_session, tender_id=tender.id)
+
+    assert result.total >= 1
+    assert any(item.subject == "Hello supplier" for item in result.items)
+    assert result.items[0].company.name == "MailCo"

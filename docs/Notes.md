@@ -310,6 +310,52 @@ G15/G16 (frontend), G19/G20 (hygiene).
   All non-behavioural except the agent session change; 268 tests still green,
   frontend lint + build clean.
 
+## 2026-06-30 — Agent rework: streaming + resumable + caged tools (G22)
+
+- **Trigger (user, live demo).** The Agent screen was the demo-killer: given a
+  goal naming a tender *in prose* (no id), the planner reached for `ingest_tenders`
+  and `download_dossiers`, **"dry run" did not stop them** (it only skipped DB
+  writes), so it ran a live 2,835-notice TED poll + a bulk portal sweep, drained
+  Claude credits, and hung so hard that Ctrl+C wouldn't return (sync endpoint
+  blocked in a threadpool that uvicorn's graceful shutdown waited on).
+- **Root cause.** (a) `dry_run` gated writes, not network — `poll_contract_notices`
+  ran `search_all_pages` regardless, and `dossier_downloader._process_one` did
+  `client.get(url)` before any dry-run check; (b) no path to resolve a prose tender
+  name to an id, so the model defaulted to "fetch from source"; (c) the off-scope
+  `download_dossiers` bulk sweep was an advertised tool; (d) no per-run cost bound.
+- **Fix (DB-first, caged, streaming, resumable).** Agent flow is now
+  `find_tender` (local id/title lookup, no network) → `find_matches` (the
+  deterministic MiniLM + trained-LR pipeline — the LLM never finds/invents a
+  match) → grounded explanation. `download_dossiers` **removed** from the agent
+  surface; `ingest_tenders`/`ingest_awards` **caged** (no network in dry-run;
+  bounded + at-most-once live; `ingest_awards` refused unless a prior
+  `find_matches` returned zero). The loop is a **streaming generator** emitting SSE
+  (`status`/`step`/`awaiting_input`/`final`/`error`) so the UI shows live progress
+  (the frozen-spinner/hang can't recur). Conversation persists to **`agent_sessions`
+  (migration `0014`)**, so an `ask_user` pause (tender disambiguation) resumes via
+  `POST /agent/run/{id}/continue` with the user's pick — true multi-turn, survives
+  restart. Frontend reads the SSE stream → live activity log + disambiguation
+  picker.
+- **Bug found in the live smoke + fixed.** The model issued a `query_db` with a
+  *guessed* schema (`companies` vs `company_profiles`, non-existent columns); the
+  failed SELECT poisoned the shared run transaction → the next state-persist commit
+  raised `InFailedSqlTransaction` and killed the run. **Fix:** run `query_db` inside
+  a SAVEPOINT (`begin_nested`) so a bad query rolls back only itself; and have
+  `find_matches` return the **structured top-N + sub-scores** so the model explains
+  from real pipeline output instead of guessing SQL. Regression-tested.
+- **Verified.** Backend 268 → **283 tests** (+15 offline guardrail tests: no-network
+  dry-run, ingest ≤1×, awards gate both ways, ask_user pause/resume, max-turns
+  truncation, bad-query no-poison). Ruff-clean; single Alembic head `0014`; frontend
+  lint + build clean. **Live smoke (dry-run, real Claude):** partial name "Neubau
+  school" → 4 local `find_tender` lookups → `ask_user` pause; resume with a picked
+  id correctly mapped reply→`tender_id`, ran `extract_tender_profile` +
+  `find_matches`, and explained the top-3 German HVAC firms **grounded only in the
+  returned scores** (semantic 0.92–0.95, qual/location 1.0, budget 0.5). Direct-id
+  path also clean. **Zero TED/portal calls** in either run.
+- **Watch-item (documented).** On resume the picker sends the option's id as reply
+  *text*; the model maps it back to the tender id from context. Confirmed working in
+  both the disambiguation-resume and direct-id runs.
+
 ---
 
 # Future Decisions (design rationale)

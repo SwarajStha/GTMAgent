@@ -122,6 +122,27 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
 
 ---
 
+- **2026-06-30 — Agent hardened: streaming + resumable + caged tools (G22).** The
+  Agent screen was the demo-killer (a prose-named tender → live TED poll + bulk
+  dossier sweep *during a dry run* → credit drain + unkillable hang). Reworked to
+  **DB-first**: `find_tender` (local lookup) → `find_matches` (deterministic
+  pipeline) → grounded explanation. `download_dossiers` removed from the agent;
+  `ingest_tenders`/`ingest_awards` caged (no network in dry-run; bounded +
+  at-most-once live; awards gated on a zero-result `find_matches`). The loop is now
+  a **streaming SSE generator** (`status`/`step`/`awaiting_input`/`final`/`error`)
+  and **resumable** — conversation persisted to `agent_sessions` (migration `0014`)
+  so an `ask_user` pause (tender disambiguation, incl. partial names) resumes via
+  `POST /agent/run/{id}/continue`. Frontend: live activity log + disambiguation
+  picker over the SSE stream. Live-smoke bug fixed: a `query_db` with a guessed
+  schema poisoned the shared run transaction → wrapped it in a SAVEPOINT and made
+  `find_matches` return structured top-N scores (so the model explains from real
+  output, not guessed SQL). 268 → **283 tests** (+15 offline guardrail tests),
+  ruff-clean, single head `0014`, frontend lint+build clean. Live-smoked (dry-run,
+  real Claude): disambiguation + resume + direct-id all clean, **zero TED/portal
+  calls**. **Manual step:** `alembic upgrade head` (0014, applied).
+
+---
+
 ## 0. The big picture in one paragraph
 
 The application (PR #7 API + PR #5 agent + PR #10 matching/emails) is a working
@@ -171,6 +192,7 @@ Everything else is downstream of that.
 | R29 | No UI for awards/companies/agent (G15) | 2026-06-23 | 3 Pinia stores + views + routes + nav, wired to `/awards`,`/companies`,`/agent`; live-API-or-sample fallback |
 | R30 | Weight sliders cosmetic (G16) | 2026-06-23 | `POST /matches/run/{id}` accepts a `weights` body → weighted re-rank persisted to `matches.weights`; "Apply weights & re-rank" in `MatchesView` |
 | R31 | Fabricated email recipient + stale ready-threshold (G17b) | 2026-06-23 | supplier contact derived from website + flagged unverified (no fake `sales@`); ready cut-off 0.8→0.6; weighted-mode hard-filter bug fixed |
+| R32 | Agent loop unsafe: dry-run hit live TED/portals, hung, drained credits, no live test (G22) | 2026-06-30 | DB-first (`find_tender`→`find_matches`); `download_dossiers` removed, `ingest_*` caged (no network in dry-run; bounded + ≤1×; awards gated on zero-match); streaming SSE + resumable `ask_user` via `agent_sessions` (mig `0014`); query_db SAVEPOINT fix; +15 offline guardrail tests; live-smoked |
 
 ---
 
@@ -454,7 +476,28 @@ two feature implementations drift. **Refs:** v5 review #7.
 ### Priority 8 — Later / out of V1 scope
 
 #### G21 🟢 Auth / multi-tenant — Phase 5, not started.
-#### G22 🟢 Agent tests fully mocked (no live-API CI test) — agent review #4.
+#### G22 ✅ Agent loop unsafe + tests fully mocked — DONE (2026-06-30)
+The original gap ("agent tests fully mocked, no live test") turned out to sit on top
+of a much bigger defect surfaced in a live demo: a goal naming a tender in prose made
+the planner call `ingest_tenders` + `download_dossiers`, and **dry-run did not stop
+the network** (it only skipped DB writes) — a live TED poll + bulk portal sweep that
+drained credits and hung the request unkillably. Reworked the whole agent: **DB-first**
+flow (`find_tender` local lookup → `find_matches` deterministic pipeline → grounded
+explanation), `download_dossiers` removed from the agent surface, `ingest_tenders` /
+`ingest_awards` **caged** (no network in dry-run; bounded + at-most-once live; awards
+gated on a zero-result `find_matches`). The loop is now a **streaming SSE generator**
+and **resumable** — the conversation persists to `agent_sessions` (migration `0014`)
+so an `ask_user` pause (tender disambiguation) resumes via
+`POST /agent/run/{id}/continue`. Frontend renders the live activity log + the
+disambiguation picker. The literal G22 ask is met by **+15 offline guardrail tests**
+(no-network dry-run, ingest ≤1×, awards gate, ask_user pause/resume, max-turns,
+bad-query-no-poison) — the valuable version asserts the guardrails, not a live API
+call. Live-smoked (dry-run, real Claude): disambiguation + resume + direct-id paths
+all clean, zero TED/portal calls. A live-smoke bug (a `query_db` with a guessed schema
+poisoned the shared transaction) was fixed with a `begin_nested` SAVEPOINT + having
+`find_matches` return structured scores. **Files:** `app/agent/{tools,controller,
+progress}.py`, `app/api/v1/agent.py`, `app/db/models.py` + migration `0014`,
+`frontend/src/stores/agent.ts` + `views/AgentView.vue`. **Refs:** agent review #4.
 #### G23 🟢 v5 model trained on 50% of data — retrain on more once ported (v5 #6, #8).
 #### G24 🟢 PDF portal scraping deferred (per `docs/Notes.md`) — adapter registry + Firecrawl/Claude fallback if/when needed.
 #### G25 🟢 `backend/easy_demo/` is doubly superseded — decide its fate

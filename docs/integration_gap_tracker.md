@@ -140,6 +140,25 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   ruff-clean, single head `0014`, frontend lint+build clean. Live-smoked (dry-run,
   real Claude): disambiguation + resume + direct-id all clean, **zero TED/portal
   calls**. **Manual step:** `alembic upgrade head` (0014, applied).
+- **2026-07-01 — Agent follow-ups: public-id resolution, honest dry-run label,
+  Save-results + Draft-email actions (G28).** (a) `find_tender` now resolves by the
+  public **`ted_notice_id`** (e.g. `420398-2026`) too, and the Tender-detail panel
+  surfaces it (styled like CPV codes) — internal db ids stay out of the UI. (b) The
+  agent dry-run checkbox relabelled honestly ("Offline mode — only use
+  already-ingested data") since post-rework it only gates the caged ingest tools.
+  (c) **G28:** the agent result card gained **Save results** (persists the narrative +
+  a server-side snapshot of the ranked matches to a new **`tender_reports`** table,
+  migration `0015`, FK `tender_id`, history kept) and **Draft email** with a 🥇/🥈/🥉
+  selector (pick any of the top-3 → existing `POST /emails/{match_id}/generate` → a
+  "Email written with [company]" confirmation linking to the Emails screen). Plus the
+  **read side**: new `GET /api/v1/emails/` list (the Emails screen had none → always
+  showed sample data) wired into `EmailsView`, and a "Saved analyses" section on the
+  Tender-detail panel reading `GET /tenders/{id}/reports`. 283 → **288 tests**
+  (+find_tender ted-id, +3 reports, +1 emails-list), ruff-clean, single head `0015`,
+  frontend lint+build clean. **Live-smoked:** save → snapshot of top-5 + list; draft
+  email for the *non-top* (🥉) pick produced a real grounded Claude email; emails list
+  returns 4 real drafts; reports list shows the saved snapshot. **Manual step:**
+  `alembic upgrade head` (0015, applied).
 
 ---
 
@@ -193,6 +212,7 @@ Everything else is downstream of that.
 | R30 | Weight sliders cosmetic (G16) | 2026-06-23 | `POST /matches/run/{id}` accepts a `weights` body → weighted re-rank persisted to `matches.weights`; "Apply weights & re-rank" in `MatchesView` |
 | R31 | Fabricated email recipient + stale ready-threshold (G17b) | 2026-06-23 | supplier contact derived from website + flagged unverified (no fake `sales@`); ready cut-off 0.8→0.6; weighted-mode hard-filter bug fixed |
 | R32 | Agent loop unsafe: dry-run hit live TED/portals, hung, drained credits, no live test (G22) | 2026-06-30 | DB-first (`find_tender`→`find_matches`); `download_dossiers` removed, `ingest_*` caged (no network in dry-run; bounded + ≤1×; awards gated on zero-match); streaming SSE + resumable `ask_user` via `agent_sessions` (mig `0014`); query_db SAVEPOINT fix; +15 offline guardrail tests; live-smoked |
+| R33 | No way to act on / save the agent's result; UI exposed internal ids (G28) | 2026-07-01 | `find_tender` + Tender-detail panel use public `ted_notice_id`; Save-results → `tender_reports` (mig `0015`, narrative + snapshot, history); Draft-email 🥇/🥈/🥉 selector → existing per-match endpoint; honest dry-run label; +4 tests; live-smoked |
 
 ---
 
@@ -445,6 +465,34 @@ in-process scheduler at runtime). Gives the product a more agentic feel.
   gate them (confirm step / auth once G21 lands) and surface the
   `dry_run`/`act` flags. **Refs:** builds on G13 (scheduler) + G8 (retrain) + G9
   (reflect); pairs with G15 (frontend shell).
+
+#### G28 ✅ Act on / save the agent's result — DONE (2026-07-01)
+The agent ended its run with a yes/no offer ("draft an email to the top match?") the
+UI couldn't answer (the run was already `final`, not `awaiting_input`). Added two
+**post-run actions** on the agent result card, plus a public-id pass:
+- **Save results** → `POST /api/v1/tenders/{id}/reports` persists the narrative + a
+  **server-side snapshot** of the tender's ranked matches to a new **`tender_reports`**
+  table (migration `0015`, FK `tender_id`, nullable FK `session_id`, `suppliers`
+  JSONB). History is kept (many per tender); the snapshot is self-contained so it
+  survives a later re-match (same durability lesson as `feedback.features` / G26).
+- **Draft email** with a 🥇/🥈/🥉 **selector** — the user picks any of the top-3 (they
+  may disagree with the model's top pick), routed to the existing
+  `POST /emails/{match_id}/generate`; a "Email written with [company]" note links to
+  the Emails screen. The top-3 come from `GET /matches?tender_id=`.
+- **Public-id pass:** `find_tender` resolves by `ted_notice_id` too, the Tender-detail
+  panel surfaces it (styled like CPV codes), and the dry-run checkbox got an honest
+  label — internal db ids stay out of the UI.
+- **Read side (the save/generate write side was useless without it):** added
+  **`GET /api/v1/emails/`** (list + `tender_id`/`recipient_type` filters) — the Emails
+  screen had no list endpoint and always showed bundled sample data, so emails from
+  the agent (or the per-match endpoint) were invisible; `EmailsView` now loads real
+  drafts on mount. And a **"Saved analyses"** section on the Tender-detail panel reads
+  `GET /tenders/{id}/reports` so saved agent reports are viewable (narrative + supplier
+  snapshot, collapsible, per selected tender).
+- **Files:** `app/db/models.py` + migration `0015`, `app/api/v1/{tenders,emails}.py`,
+  `app/agent/tools.py` (ted-id resolution), `frontend/src/stores/{agent,emails,tenders}.ts`
+  + `views/{AgentView,TendersView,EmailsView}.vue`. 283 → **288 tests**, live-smoked
+  (save/draft + list endpoints). **Manual step:** `alembic upgrade head` (0015, applied).
 
 ### Priority 7 — Dependencies, artifacts, hygiene
 

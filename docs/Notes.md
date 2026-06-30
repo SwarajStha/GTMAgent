@@ -356,6 +356,48 @@ G15/G16 (frontend), G19/G20 (hygiene).
   *text*; the model maps it back to the tender id from context. Confirmed working in
   both the disambiguation-resume and direct-id runs.
 
+## 2026-07-01 — Agent follow-ups: public-id resolution + result actions (G28)
+
+- **Trigger (user, continuing the demo).** Two things off the back of the agent
+  rework: (1) the UI showed the internal db `id`, and the publicly-known
+  `ted_notice_id` (which the detail panel highlights) couldn't be used as input;
+  (2) the agent ended its run with a yes/no offer ("draft an email to the top
+  match?") the UI had no way to answer — the run was already `final`, not
+  `awaiting_input`.
+- **Public-id pass.** `find_tender` now resolves by `ted_notice_id` (e.g.
+  `420398-2026`) as well as internal id / title; its output + the ask_user picker
+  lead with the TED id (internal `tender_id` kept only as the model's hidden handle).
+  The **Tender-detail panel** gained a "TED notice ID" chip (styled like CPV codes).
+  Decision: **don't expose internal db ids in the UI** — lean on the public TED id.
+- **Honest dry-run label.** Post-rework the agent's `dry_run` only gates the caged
+  ingest tools, so the checkbox was relabelled "Offline mode — only use
+  already-ingested data" with a note that matching runs either way (it no longer
+  over-promises "no writes").
+- **Result actions (G28).** Two buttons on the agent result card:
+  - **Save results** → `POST /api/v1/tenders/{id}/reports` persists the narrative +
+    a **server-side snapshot** of the ranked matches to a new **`tender_reports`**
+    table (migration `0015`, FK `tender_id`, `suppliers` JSONB). History kept; the
+    snapshot is self-contained (survives a re-match — the `feedback.features` /
+    G26 durability lesson).
+  - **Draft email** with a 🥇/🥈/🥉 **selector** — the user picks *which* of the
+    top-3 to write to (they may disagree with the model's top pick), routed to the
+    existing `POST /emails/{match_id}/generate`; a "Email written with [company]"
+    note links to the Emails screen. Top-3 sourced from `GET /matches?tender_id=`.
+- **Read side (found while UI-testing — the write side was useless alone).** Two
+  gaps surfaced: (1) the **Emails screen had no list endpoint**, so it always showed
+  bundled sample data and agent-/per-match-generated emails were invisible — added
+  **`GET /api/v1/emails/`** (list + `tender_id`/`recipient_type` filters) + an
+  `EmailsView` fetch on mount. (2) **Saved analyses weren't viewable** — added a
+  "Saved analyses" section on the Tender-detail panel reading
+  `GET /tenders/{id}/reports` (narrative + supplier snapshot, collapsible).
+- **Verify.** 283 → **288 tests** (+`find_tender` ted-id, +3 reports, +1 emails-list),
+  ruff-clean, single head `0015`, frontend lint+build clean. **Live-smoked** against
+  the dev DB (tender 2807): save → 200 + snapshot of the top-5 + list; **draft email
+  for the non-top (🥉) pick** (Sauter Cumulus) produced a real grounded Claude email —
+  confirming the user-choice requirement. The only hiccup was a `curl`-quoting 400
+  (literal `\n` in a shell-single-quoted JSON body), not an API bug — a clean
+  `urllib` POST returned 200. **Manual step:** `alembic upgrade head` (0015, applied).
+
 ---
 
 # Future Decisions (design rationale)

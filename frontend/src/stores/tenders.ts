@@ -25,6 +25,23 @@ interface ApiTenderList {
   offset: number
 }
 
+interface ApiTenderReport {
+  id: string
+  tender_id: number
+  goal: string | null
+  narrative: string
+  suppliers: { company_name: string; final_score: number }[] | null
+  created_at: string
+}
+
+export interface TenderReportItem {
+  id: string
+  goal: string | null
+  narrative: string
+  suppliers: { companyName: string; finalScore: number }[]
+  createdAt: string
+}
+
 const statusMap = new Set<TenderStatus>(['active', 'review', 'restricted', 'closing'])
 
 function toTenderItem(tender: ApiTender): TenderItem {
@@ -87,6 +104,9 @@ export const useTendersStore = defineStore('tenders', {
     loading: false,
     error: null as string | null,
     source: 'sample' as 'api' | 'sample',
+    // Saved agent analyses for the currently-selected tender (G28 viewer).
+    reports: [] as TenderReportItem[],
+    reportsLoading: false,
   }),
   getters: {
     activeCount: (state) => state.items.filter((item) => item.status === 'active').length,
@@ -115,6 +135,33 @@ export const useTendersStore = defineStore('tenders', {
         this.source = 'sample'
       } finally {
         this.loading = false
+      }
+    },
+    // Load saved analyses for one tender (the "Saved analyses" panel). Best-effort:
+    // a sample-data id (non-numeric) or no reports just yields an empty list.
+    async fetchReports(tenderId: string) {
+      this.reportsLoading = true
+      try {
+        const response = await fetch(`/api/v1/tenders/${tenderId}/reports`)
+        if (!response.ok) {
+          this.reports = []
+          return
+        }
+        const body = (await response.json()) as ApiTenderReport[]
+        this.reports = body.map((r) => ({
+          id: r.id,
+          goal: r.goal,
+          narrative: r.narrative,
+          suppliers: (r.suppliers ?? []).map((s) => ({
+            companyName: s.company_name,
+            finalScore: s.final_score,
+          })),
+          createdAt: r.created_at,
+        }))
+      } catch {
+        this.reports = []
+      } finally {
+        this.reportsLoading = false
       }
     },
   },

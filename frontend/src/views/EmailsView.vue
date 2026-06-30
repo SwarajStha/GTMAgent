@@ -13,7 +13,9 @@ const editing = ref(false)
 const draftBody = ref('')
 
 onMounted(async () => {
-  await matchesStore.fetchAll()
+  // Load real stored drafts (agent- or per-match-generated) instead of the
+  // bundled sample data; matches are needed for the match-context panel.
+  await Promise.all([emailsStore.fetchAll(), matchesStore.fetchAll()])
   selectedId.value = emailsStore.drafts[0]?.id ?? ''
 })
 

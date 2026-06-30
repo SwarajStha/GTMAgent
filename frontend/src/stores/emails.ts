@@ -132,6 +132,28 @@ export const useEmailsStore = defineStore('emails', {
     approvedCount: (state) => state.drafts.filter((draft) => draft.status === 'approved').length,
   },
   actions: {
+    async fetchAll(params: URLSearchParams = new URLSearchParams()) {
+      this.loading = true
+      this.error = null
+      try {
+        if (!params.has('limit')) {
+          params.set('limit', '100')
+        }
+        const response = await fetch(`/api/v1/emails/?${params.toString()}`)
+        if (!response.ok) {
+          throw new Error(`Email API returned ${response.status}`)
+        }
+        const body = (await response.json()) as { items: ApiEmail[] }
+        this.drafts = body.items.map(toEmailDraft)
+        this.source = 'api'
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Email API request failed'
+        this.drafts = emailDrafts
+        this.source = 'sample'
+      } finally {
+        this.loading = false
+      }
+    },
     async generate(matchId: string) {
       this.loading = true
       this.error = null

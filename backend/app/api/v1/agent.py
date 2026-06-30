@@ -1,6 +1,8 @@
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.controller import AgentController
@@ -8,60 +10,84 @@ from app.core.config import get_settings
 
 router = APIRouter()
 
+
 class AgentRequest(BaseModel):
     goal: str = Field(..., description="The instruction or goal for the Agent.")
     dry_run: bool = Field(
         default=True,
         description=(
-            "When true (default), write-capable tools (ingest_tenders, "
-            "ingest_awards, download_dossiers) validate inputs and report "
-            "what would happen without hitting the live TED API or writing "
-            "to the database. Set to false to allow live writes."
+            "When true (default), the caged write tools (ingest_tenders, "
+            "ingest_awards) make NO live TED call and report what they would do. "
+            "Set to false to allow bounded live ingestion as a fallback."
         ),
     )
 
-class AgentStep(BaseModel):
-    tool: str
-    # Raw tool input as the model supplied it. Heterogeneous across tools
-    # (e.g. find_matches → {"tender_id": int}, query_db → {"sql_query": str}),
-    # so `dict[str, Any]` is the honest shape — the per-tool field types live in
-    # the tool schemas in app/agent/tools.py, not here.
-    args: dict[str, Any]
 
-class AgentResponse(BaseModel):
-    goal: str
-    steps: list[AgentStep]
-    output: str
-    truncated: bool = False
+class ContinueRequest(BaseModel):
+    reply: str = Field(..., description="The user's answer to a pending ask_user question.")
 
-@router.post("/run", response_model=AgentResponse)
-def run_agent(request: AgentRequest):
-    """
-    Execute the Agent Controller with a user goal.
-    This runs synchronously and returns the fully evaluated steps and final text.
+
+def _sse(event: dict[str, Any]) -> str:
+    """Serialize one event as an SSE `data:` frame."""
+    return f"data: {json.dumps(event)}\n\n"
+
+
+# Disable proxy/server response buffering so events flush immediately.
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+@router.post("/run")
+def run_agent(request: AgentRequest) -> StreamingResponse:
+    """Run the agent for a goal, streaming progress as Server-Sent Events.
+
+    Emits `status` / `step` / `awaiting_input` / `final` / `error` events. On
+    `awaiting_input` the stream closes and the run can be resumed via
+    `POST /run/{session_id}/continue`.
     """
     settings = get_settings()
-
     if not settings.anthropic_api_key:
         raise HTTPException(
             status_code=500,
-            detail="Server is not configured with an ANTHROPIC_API_KEY."
+            detail="Server is not configured with an ANTHROPIC_API_KEY.",
         )
 
-    agent = AgentController(api_key=settings.anthropic_api_key, dry_run=request.dry_run)
+    controller = AgentController(api_key=settings.anthropic_api_key, dry_run=request.dry_run)
 
-    try:
-        # Run the tool-loop
-        result = agent.run(user_goal=request.goal)
+    def gen():
+        try:
+            for event in controller.stream_run(request.goal):
+                yield _sse(event)
+        except Exception as e:  # noqa: BLE001 — surface as a stream event, don't 500 mid-stream
+            yield _sse({"type": "error", "message": f"Agent execution failed: {e}"})
 
-        return AgentResponse(
-            goal=result["goal"],
-            steps=[AgentStep(tool=step["tool"], args=step["args"]) for step in result["steps"]],
-            output=result["output"],
-            truncated=result.get("truncated", False)
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.post("/run/{session_id}/continue")
+def continue_agent(session_id: str, request: ContinueRequest) -> StreamingResponse:
+    """Resume a paused agent run with the user's answer (SSE, same event shape)."""
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="Server is not configured with an ANTHROPIC_API_KEY.",
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent execution failed: {str(e)}")
+
+    # dry_run is restored from the persisted session inside stream_continue.
+    controller = AgentController(api_key=settings.anthropic_api_key)
+
+    def gen():
+        try:
+            for event in controller.stream_continue(session_id, request.reply):
+                yield _sse(event)
+        except Exception as e:  # noqa: BLE001
+            yield _sse({"type": "error", "message": f"Agent execution failed: {e}"})
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 class ReflectResponse(BaseModel):

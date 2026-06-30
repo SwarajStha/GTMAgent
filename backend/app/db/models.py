@@ -24,6 +24,7 @@ from sqlalchemy import (
     Text,
     false,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -356,6 +357,41 @@ class AgentRun(Base, TimestampMixin):
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     steps: Mapped[list | dict | None] = mapped_column(JSONB, nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentSession(Base, TimestampMixin):
+    """A resumable agent conversation (migration 0014 / G22 hardening).
+
+    Persists the full Anthropic message array so a run that pauses on the
+    `ask_user` tool (``status='awaiting_input'``) can be resumed by
+    ``POST /agent/run/{id}/continue`` with the user's choice — the
+    disambiguation flow (e.g. a partial tender name matched several tenders).
+
+    Columns:
+      * `messages`  — the Anthropic conversation array (plain dicts, so it
+                      round-trips through JSONB and back into `messages.create`).
+      * `steps`     — tool calls made so far (drives the UI steps panel).
+      * `pending`   — when awaiting input: the open `ask_user` question + the
+                      `tool_use_id` it must be answered against + the options.
+      * `run_state` — per-run guard counters: caged-ingest call counts and the
+                      zero-match flag that gates `ingest_awards`.
+    """
+    __tablename__ = "agent_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    dry_run: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=true(), default=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="running", default="running"
+    )
+    messages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    steps: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    pending: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    run_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Reflection(Base, TimestampMixin):

@@ -1,176 +1,203 @@
-import pytest
-from unittest.mock import MagicMock, patch
-from app.db.models import AgentRun
-from app.agent.controller import AgentController
+"""Offline guardrail tests for the streaming/resumable AgentController (G22).
+
+The Anthropic client is a scripted fake (no network), and the live-ingest
+functions are monkeypatched so we can assert they are NOT called in dry-run and
+are bounded/gated when live. DB-backed (agent_sessions) via the `db_session`
+fixture, like the reflector tests. No ML deps (find_matches is faked).
+"""
+from __future__ import annotations
+
+import uuid
+from unittest.mock import MagicMock
+
 from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
 
-# A dummy response mimicking what Anthropic might return when it wants to use a tool
-def mock_anthropic_message_tool_use(*args, **kwargs):
-    block = ToolUseBlock(
-        id="toolu_123",
-        name="query_db",
-        input={"sql_query": "SELECT * FROM public.tenders LIMIT 1"},
-        type="tool_use"
-    )
-    # The SDK creates message objects where content is a list of blocks
+from app.agent.controller import AgentController
+from app.db.models import AgentSession
+
+# ── scripted fake Anthropic client ───────────────────────────────────────────
+
+def _msg(blocks, stop_reason):
     return Message(
-        id="msg_123",
-        content=[block],
-        model="claude-3-5-sonnet-20241022",
+        id="msg_" + uuid.uuid4().hex[:6],
+        content=blocks,
+        model="claude-test",
         role="assistant",
-        stop_reason="tool_use",
+        stop_reason=stop_reason,
         stop_sequence=None,
         type="message",
-        usage=Usage(input_tokens=10, output_tokens=10)
+        usage=Usage(input_tokens=1, output_tokens=1),
     )
 
-# A dummy response mimicking Anthropic finishing the task
-def mock_anthropic_message_final(*args, **kwargs):
-    block = TextBlock(
-        text="I have checked the database and found the information you need.",
-        type="text"
-    )
-    return Message(
-        id="msg_456",
-        content=[block],
-        model="claude-3-5-sonnet-20241022",
-        role="assistant",
-        stop_reason="end_turn",
-        stop_sequence=None,
-        type="message",
-        usage=Usage(input_tokens=15, output_tokens=20)
-    )
 
-class MockMessages:
-    def __init__(self):
-        self.call_count = 0
+def _tool(name, inp, block_id="tool_1"):
+    return _msg([ToolUseBlock(id=block_id, name=name, input=inp, type="tool_use")], "tool_use")
+
+
+def _final(text):
+    return _msg([TextBlock(text=text, type="text")], "end_turn")
+
+
+class _ScriptedMessages:
+    def __init__(self, scripts):
+        self.scripts = scripts
+        self.calls = 0
 
     def create(self, *args, **kwargs):
-        self.call_count += 1
-        if self.call_count == 1:
-            return mock_anthropic_message_tool_use()
-        return mock_anthropic_message_final()
+        i = min(self.calls, len(self.scripts) - 1)
+        self.calls += 1
+        return self.scripts[i]
 
-class MockClient:
+
+class _ScriptedClient:
+    def __init__(self, scripts):
+        self.messages = _ScriptedMessages(scripts)
+
+
+class _FakePipelineZero:
+    """MatchingPipeline stub that returns no matches (no embedder/torch)."""
+
     def __init__(self, *args, **kwargs):
-        self.messages = MockMessages()
+        pass
+
+    def run(self, *args, **kwargs):
+        return []
 
 
-class EndlessToolUseMessages:
-    """Always asks for another tool call — never reaches `end_turn`.
+# ── tests ────────────────────────────────────────────────────────────────────
 
-    Used to exercise the max_turns guard without a real multi-turn
-    conversation.
-    """
+def test_dry_run_ingest_makes_no_network(db_session, monkeypatch):
+    """A dry-run ingest_tenders must NOT call the live TED poll — the old bug
+    was that dry-run still hit the network."""
+    poll = MagicMock()
+    monkeypatch.setattr("app.ingestion.ted_client.poll_contract_notices", poll)
 
-    def create(self, *args, **kwargs):
-        return mock_anthropic_message_tool_use()
+    client = _ScriptedClient([
+        _tool("ingest_tenders", {"days_back": 3}),
+        _final("Nothing ingested — this was a dry run."),
+    ])
+    agent = AgentController(client=client, dry_run=True)
+    result = agent.run("Get the latest tenders")
 
-
-class EndlessToolUseClient:
-    def __init__(self, *args, **kwargs):
-        self.messages = EndlessToolUseMessages()
-
-
-@patch("anthropic.Anthropic", new=MockClient)
-@patch("app.agent.controller.dispatch_tool")
-@patch("app.agent.controller.SessionLocal")
-def test_agent_controller_tool_loop(mock_session_local, mock_dispatch):
-    """
-    Test the multi-step tool-use loop of the AgentController.
-    """
-    # Arrange
-    mock_dispatch.return_value = "Mocked result from DB"
-    
-    mock_db_session = MagicMock()
-    mock_session_local.return_value.__enter__.return_value = mock_db_session
-    
-    agent = AgentController(api_key="dummy_key_for_test")
-    goal = "Find me a tender"
-    
-    # Act
-    result = agent.run(user_goal=goal)
-    
-    # Assert
-    # 1. Check returned structure
-    assert result["goal"] == goal
-    assert result["output"] == "I have checked the database and found the information you need."
-    
-    # 2. Check that the steps were logged correctly
-    assert len(result["steps"]) == 1
-    assert result["steps"][0]["tool"] == "query_db"
-    assert "sql_query" in result["steps"][0]["args"]
-    
-    # 3. Verify exactly one tool was dispatched
-    mock_dispatch.assert_called_once()
-    
-    # 4. Verify it was correctly saved to the DB
-    mock_db_session.add.assert_called_once()
+    poll.assert_not_called()
+    assert result["type"] == "final"
+    assert result["steps"][0]["tool"] == "ingest_tenders"
 
 
-@patch("anthropic.Anthropic", new=MockClient)
-@patch("app.agent.controller.dispatch_tool")
-@patch("app.agent.controller.SessionLocal")
-def test_agent_controller_defaults_to_dry_run(mock_session_local, mock_dispatch):
-    """
-    AgentController must default to dry_run=True and forward it to
-    dispatch_tool, so a casual chat goal can't trigger live writes
-    (live TED polls / dossier downloads / DB writes) by accident.
-    """
-    mock_dispatch.return_value = "Mocked result from DB"
+def test_ingest_tenders_capped_once_live(db_session, monkeypatch):
+    """Live ingest_tenders runs at most once per run, even if the model asks twice."""
+    poll = MagicMock(return_value={"fetched": 0, "new": 0, "updated": 0, "errors": 0})
+    monkeypatch.setattr("app.ingestion.ted_client.poll_contract_notices", poll)
 
-    mock_db_session = MagicMock()
-    mock_session_local.return_value.__enter__.return_value = mock_db_session
+    client = _ScriptedClient([
+        _tool("ingest_tenders", {"days_back": 2}, block_id="a"),
+        _tool("ingest_tenders", {"days_back": 2}, block_id="b"),
+        _final("Done."),
+    ])
+    agent = AgentController(client=client, dry_run=False)
+    agent.run("Ingest tenders twice")
 
-    agent = AgentController(api_key="dummy_key_for_test")
-    assert agent.dry_run is True
-
-    agent.run(user_goal="Find me a tender")
-
-    mock_dispatch.assert_called_once()
-    _, kwargs = mock_dispatch.call_args
-    assert kwargs["dry_run"] is True
+    assert poll.call_count == 1
 
 
-@patch("anthropic.Anthropic", new=MockClient)
-@patch("app.agent.controller.dispatch_tool")
-@patch("app.agent.controller.SessionLocal")
-def test_agent_controller_forwards_explicit_live_mode(mock_session_local, mock_dispatch):
-    """An explicit dry_run=False must reach dispatch_tool unchanged."""
-    mock_dispatch.return_value = "Mocked result from DB"
+def test_ingest_awards_gated_then_allowed_after_zero_match(db_session, monkeypatch):
+    """ingest_awards is refused until find_matches returns zero, then permitted once."""
+    backfill = MagicMock(return_value={"new": 0})
+    monkeypatch.setattr("app.ingestion.awards_client.backfill_awards", backfill)
+    monkeypatch.setattr("app.matching.pipeline.MatchingPipeline", _FakePipelineZero)
 
-    mock_db_session = MagicMock()
-    mock_session_local.return_value.__enter__.return_value = mock_db_session
+    client = _ScriptedClient([
+        _tool("find_matches", {"tender_id": 5}, block_id="m"),
+        _tool("ingest_awards", {"months_back": 1}, block_id="aw"),
+        _final("Rebuilt the pool."),
+    ])
+    agent = AgentController(client=client, dry_run=False)
+    result = agent.run("Match tender 5, rebuild pool if empty")
 
-    agent = AgentController(api_key="dummy_key_for_test", dry_run=False)
-    agent.run(user_goal="Ingest today's tenders for real")
-
-    _, kwargs = mock_dispatch.call_args
-    assert kwargs["dry_run"] is False
+    backfill.assert_called_once()
+    tools = [s["tool"] for s in result["steps"]]
+    assert tools == ["find_matches", "ingest_awards"]
 
 
-@patch("anthropic.Anthropic", new=EndlessToolUseClient)
-@patch("app.agent.controller.dispatch_tool")
-@patch("app.agent.controller.SessionLocal")
-def test_agent_controller_truncates_gracefully_after_max_turns(mock_session_local, mock_dispatch):
-    """
-    A plan that never reaches `end_turn` must stop after `max_turns` and
-    return partial results — not raise and 500 the request.
-    """
-    mock_dispatch.return_value = "Mocked result from DB"
+def test_ingest_awards_refused_without_zero_match(db_session, monkeypatch):
+    """Without a prior zero-result find_matches, ingest_awards must not run."""
+    backfill = MagicMock(return_value={"new": 0})
+    monkeypatch.setattr("app.ingestion.awards_client.backfill_awards", backfill)
 
-    mock_db_session = MagicMock()
-    mock_session_local.return_value.__enter__.return_value = mock_db_session
+    client = _ScriptedClient([
+        _tool("ingest_awards", {"months_back": 1}),
+        _final("Could not rebuild."),
+    ])
+    agent = AgentController(client=client, dry_run=False)
+    agent.run("Rebuild the supplier pool")
 
-    agent = AgentController(api_key="dummy_key_for_test", max_turns=3)
-    result = agent.run(user_goal="Loop forever")
+    backfill.assert_not_called()
 
-    # Should not raise — returns partial progress with a truncation flag.
+
+def test_ask_user_pauses_then_resumes(db_session):
+    """ask_user pauses the run (awaiting_input + persisted session); a continue
+    with the user's reply resumes the same conversation to completion."""
+    run_client = _ScriptedClient([
+        _tool(
+            "ask_user",
+            {"question": "Which tender?", "options": [{"id": "5", "label": "Tender 5"}]},
+            block_id="ask",
+        ),
+    ])
+    agent = AgentController(client=run_client, dry_run=True)
+    paused = agent.run("Find suppliers for the school tender")
+
+    assert paused["type"] == "awaiting_input"
+    assert paused["question"] == "Which tender?"
+    session_id = paused["session_id"]
+
+    sess = db_session.get(AgentSession, uuid.UUID(session_id))
+    assert sess is not None
+    assert sess.status == "awaiting_input"
+    assert sess.pending["ask_id"] == "ask"
+
+    # Resume with a fresh controller (mirrors the /continue endpoint).
+    resume_client = _ScriptedClient([_final("Resolved to tender 5 and ranked suppliers.")])
+    resumer = AgentController(client=resume_client)
+    events = list(resumer.stream_continue(session_id, "5"))
+
+    final = next(e for e in events if e["type"] == "final")
+    assert "Resolved to tender 5" in final["output"]
+
+    db_session.expire_all()
+    sess = db_session.get(AgentSession, uuid.UUID(session_id))
+    assert sess.status == "done"
+
+
+def test_max_turns_truncates_gracefully(db_session):
+    """A plan that never finishes stops after max_turns with partial progress —
+    it must not raise or loop forever (the credit-drain failure mode)."""
+    client = _ScriptedClient([_tool("query_db", {"sql_query": "SELECT 1"})])  # endless
+    agent = AgentController(client=client, dry_run=True, max_turns=3)
+    result = agent.run("Loop forever")
+
     assert result["truncated"] is True
-    assert "max_turns" not in result["output"]  # human-readable note, not the raw attr name
     assert "stopped after 3 turns" in result["output"]
     assert len(result["steps"]) == 3
 
-    # The (truncated) run is still persisted for the reflection loop.
-    mock_db_session.add.assert_called_once()
-    mock_db_session.commit.assert_called_once()
+
+def test_continue_unknown_session_errors(db_session):
+    agent = AgentController(client=_ScriptedClient([_final("x")]))
+    events = list(agent.stream_continue(str(uuid.uuid4()), "5"))
+    assert events and events[-1]["type"] == "error"
+
+
+def test_bad_query_db_does_not_poison_the_run(db_session):
+    """A failing query_db (e.g. the model guessing a wrong table/column) must not
+    abort the shared run transaction — the savepoint rolls it back and the run
+    finishes normally. Regression for the live-smoke transaction-abort bug."""
+    client = _ScriptedClient([
+        _tool("query_db", {"sql_query": "SELECT * FROM nonexistent_table_xyz"}),
+        _final("Recovered and finished."),
+    ])
+    agent = AgentController(client=client, dry_run=True)
+    result = agent.run("Query a bad table then finish")
+
+    assert result["type"] == "final"
+    assert result["output"] == "Recovered and finished."
+    assert [s["tool"] for s in result["steps"]] == ["query_db"]

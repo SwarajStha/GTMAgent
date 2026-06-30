@@ -8,6 +8,8 @@ the old substring blocklist.
 """
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from app.agent.tools import _read_only_sql_error, dispatch_tool
@@ -95,3 +97,98 @@ def test_query_db_blocks_write_real_db(db_session) -> None:
     )
     assert result.startswith("Error executing query")
     assert "SELECT" in result
+
+
+# ── find_tender (local lookup) ───────────────────────────────────────────────
+
+def _make_tender(ted_id: str, title: str, country: str = "DEU") -> Tender:
+    return Tender(
+        ted_notice_id=ted_id,
+        title=title,
+        buyer_country=country,
+        cpv_codes=["45000000"],
+        raw_json={"publication-number": ted_id},
+    )
+
+
+def test_find_tender_by_id(db_session) -> None:
+    t = _make_tender("FT-1", "Ilmenau school new build")
+    db_session.add(t)
+    db_session.flush()
+
+    out = dispatch_tool("find_tender", {"query": str(t.id)}, db_session)
+    assert "Found 1 tender" in out
+    assert f"id={t.id}" in out
+
+
+def test_find_tender_by_title_single(db_session) -> None:
+    db_session.add(_make_tender("FT-2", "Bridge refurbishment in Bremen"))
+    db_session.flush()
+
+    out = dispatch_tool("find_tender", {"query": "Bremen"}, db_session)
+    assert "Found 1 tender" in out
+    assert "Bridge refurbishment" in out
+
+
+def test_find_tender_multiple_prompts_ask_user(db_session) -> None:
+    db_session.add(_make_tender("FT-3", "School roof works Hamburg"))
+    db_session.add(_make_tender("FT-4", "School heating works Hamburg"))
+    db_session.flush()
+
+    out = dispatch_tool("find_tender", {"query": "School"}, db_session)
+    assert "Found 2 possible tenders" in out
+    assert "ask_user" in out
+
+
+def test_find_tender_none(db_session) -> None:
+    out = dispatch_tool("find_tender", {"query": "nonexistent-xyz"}, db_session)
+    assert "No tenders in the local database match" in out
+
+
+# ── caged live-ingest tools ──────────────────────────────────────────────────
+
+def test_ingest_tenders_dry_run_no_network(monkeypatch) -> None:
+    poll = MagicMock()
+    monkeypatch.setattr("app.ingestion.ted_client.poll_contract_notices", poll)
+
+    out = dispatch_tool("ingest_tenders", {"days_back": 3}, None, dry_run=True, run_state={})
+    assert "[dry-run]" in out
+    poll.assert_not_called()
+
+
+def test_ingest_tenders_live_capped_once(monkeypatch) -> None:
+    poll = MagicMock(return_value={"fetched": 0})
+    monkeypatch.setattr("app.ingestion.ted_client.poll_contract_notices", poll)
+
+    state: dict = {}
+    first = dispatch_tool("ingest_tenders", {"days_back": 2}, None, dry_run=False, run_state=state)
+    second = dispatch_tool("ingest_tenders", {"days_back": 2}, None, dry_run=False, run_state=state)
+
+    assert poll.call_count == 1
+    assert "complete" in first
+    assert "Already ingested" in second
+
+
+def test_ingest_awards_refused_without_zero_match(monkeypatch) -> None:
+    backfill = MagicMock()
+    monkeypatch.setattr("app.ingestion.awards_client.backfill_awards", backfill)
+
+    out = dispatch_tool("ingest_awards", {"months_back": 1}, None, dry_run=False, run_state={})
+    assert "refused" in out
+    backfill.assert_not_called()
+
+
+def test_ingest_awards_allowed_after_zero_match(monkeypatch) -> None:
+    backfill = MagicMock(return_value={"new": 0})
+    monkeypatch.setattr("app.ingestion.awards_client.backfill_awards", backfill)
+
+    out = dispatch_tool(
+        "ingest_awards", {"months_back": 1}, None, dry_run=False, run_state={"zero_match": True}
+    )
+    assert "complete" in out
+    backfill.assert_called_once()
+
+
+def test_download_dossiers_disabled() -> None:
+    out = dispatch_tool("download_dossiers", {}, None)
+    assert "disabled" in out

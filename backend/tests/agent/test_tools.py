@@ -121,6 +121,16 @@ def test_find_tender_by_id(db_session) -> None:
     assert f"id={t.id}" in out
 
 
+def test_find_tender_by_ted_notice_id(db_session) -> None:
+    """The public TED notice id (what the UI shows) must resolve a tender."""
+    db_session.add(_make_tender("420398-2026", "Spain – Facilities management – CITRAM"))
+    db_session.flush()
+
+    out = dispatch_tool("find_tender", {"query": "420398-2026"}, db_session)
+    assert "Found 1 tender" in out
+    assert "TED 420398-2026" in out
+
+
 def test_find_tender_by_title_single(db_session) -> None:
     db_session.add(_make_tender("FT-2", "Bridge refurbishment in Bremen"))
     db_session.flush()

@@ -6,6 +6,7 @@ const agentStore = useAgentStore()
 const goal = ref('Find the top 3 suppliers for tender 16 and explain why.')
 const dryRun = ref(true)
 const act = ref(true)
+const replyText = ref('')
 
 function pretty(value: unknown) {
   return JSON.stringify(value, null, 2)
@@ -16,6 +17,16 @@ async function run() {
     await agentStore.runAgent(goal.value, dryRun.value)
   } catch {
     /* error surfaced via agentStore.runError; sample run shown as fallback */
+  }
+}
+
+async function pick(reply: string) {
+  if (!reply) return
+  replyText.value = ''
+  try {
+    await agentStore.continueAgent(reply)
+  } catch {
+    /* error surfaced via agentStore.runError */
   }
 }
 
@@ -35,8 +46,8 @@ async function reflect() {
         <p class="section-kicker">Agent</p>
         <h2 class="mt-1 section-title">Plan &amp; execute a goal</h2>
         <p class="mt-2 text-xs font-semibold leading-5 text-slate-500">
-          The planner-executor loop picks tools (ingest, match, draft, query) to satisfy a goal.
-          Live runs need a server <code>ANTHROPIC_API_KEY</code>.
+          The agent resolves the tender locally, runs the matching pipeline, and explains the
+          result. Live runs need a server <code>ANTHROPIC_API_KEY</code>.
         </p>
         <textarea
           v-model="goal"
@@ -45,7 +56,7 @@ async function reflect() {
         />
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-600">
           <input v-model="dryRun" type="checkbox">
-          Dry run (validate write-tools without hitting live TED / the DB)
+          Dry run (no live TED calls — caged ingest tools report only)
         </label>
         <button class="btn-primary mt-4 w-full" type="button" :disabled="agentStore.runLoading" @click="run">
           {{ agentStore.runLoading ? 'Running…' : 'Run agent' }}
@@ -81,6 +92,64 @@ async function reflect() {
     </section>
 
     <section class="min-w-0 space-y-5">
+      <!-- Live activity log (streamed status lines). -->
+      <article v-if="agentStore.activity.length" class="surface p-5">
+        <p class="section-kicker">Activity</p>
+        <ul class="mt-3 space-y-1.5">
+          <li
+            v-for="(line, index) in agentStore.activity"
+            :key="index"
+            class="flex items-start gap-2 text-sm font-semibold leading-6 text-slate-600"
+          >
+            <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-300" />
+            {{ line }}
+          </li>
+          <li
+            v-if="agentStore.runLoading"
+            class="flex items-center gap-2 text-sm font-bold text-slate-400"
+          >
+            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400" />
+            working…
+          </li>
+        </ul>
+      </article>
+
+      <!-- Disambiguation picker (agent paused on ask_user). -->
+      <article v-if="agentStore.awaiting" class="surface border-indigo-200 p-5">
+        <p class="section-kicker text-indigo-500">Needs your input</p>
+        <p class="mt-2 text-sm font-bold leading-6 text-slate-800">
+          {{ agentStore.awaiting.question }}
+        </p>
+        <div class="mt-3 flex flex-col gap-2">
+          <button
+            v-for="(option, index) in agentStore.awaiting.options"
+            :key="index"
+            type="button"
+            class="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
+            :disabled="agentStore.runLoading"
+            @click="pick(String(option.id ?? option.label ?? ''))"
+          >
+            {{ option.label ?? option.id }}
+          </button>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <input
+            v-model="replyText"
+            class="field w-full py-2"
+            placeholder="…or type an answer"
+            @keyup.enter="pick(replyText)"
+          >
+          <button
+            class="btn-secondary shrink-0"
+            type="button"
+            :disabled="agentStore.runLoading || !replyText"
+            @click="pick(replyText)"
+          >
+            Send
+          </button>
+        </div>
+      </article>
+
       <article v-if="agentStore.run" class="surface p-5">
         <div class="flex items-center justify-between gap-3">
           <p class="section-kicker">Agent run</p>
@@ -103,8 +172,8 @@ async function reflect() {
           </li>
         </ol>
 
-        <p class="mt-5 text-xs font-black uppercase tracking-[0.14em] text-slate-400">Output</p>
-        <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{{ agentStore.run.output }}</p>
+        <p v-if="agentStore.run.output" class="mt-5 text-xs font-black uppercase tracking-[0.14em] text-slate-400">Output</p>
+        <p v-if="agentStore.run.output" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{{ agentStore.run.output }}</p>
       </article>
 
       <article v-if="agentStore.reflection" class="surface p-5">
@@ -122,7 +191,10 @@ async function reflect() {
         </div>
       </article>
 
-      <article v-if="!agentStore.run && !agentStore.reflection" class="surface p-8 text-center">
+      <article
+        v-if="!agentStore.run && !agentStore.reflection && !agentStore.activity.length"
+        class="surface p-8 text-center"
+      >
         <p class="text-sm font-semibold text-slate-500">
           Run the agent or a reflection cycle to see results here.
         </p>

@@ -100,6 +100,17 @@ export interface AgentRunResult {
   truncated: boolean
 }
 
+export interface AgentOption {
+  id?: string
+  label?: string
+}
+
+export interface AgentAwaiting {
+  sessionId: string
+  question: string
+  options: AgentOption[]
+}
+
 export interface ReflectionResult {
   id: string
   metrics: Record<string, unknown>
@@ -176,11 +187,12 @@ export const companies: CompanyItem[] = [
 export const agentRunSample: AgentRunResult = {
   goal: 'Find the strongest supplier for the Leipzig fit-out tender and draft outreach.',
   steps: [
+    { tool: 'find_tender', args: { query: 'Leipzig fit-out' } },
     { tool: 'find_matches', args: { tender_id: 16, top_n: 3 } },
     { tool: 'draft_email', args: { match_id: 'sample-match-id' } },
   ],
   output:
-    'Ranked the supplier pool for tender 16, surfaced three German fit-out contractors, and drafted an evidence-grounded outreach email to the top match. (Sample data — backend agent not reachable.)',
+    'Resolved the tender locally, ranked the supplier pool for tender 16, surfaced three German fit-out contractors, and drafted an evidence-grounded outreach email to the top match. (Sample data — backend agent not reachable.)',
   truncated: false,
 }
 

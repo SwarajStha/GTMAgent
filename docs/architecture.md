@@ -24,10 +24,11 @@ We avoid Supabase client libraries — we talk to Postgres directly via
 psycopg and the SQLAlchemy engine.
 
 ### Embeddings — sentence-transformers, CPU-only, lazy-loaded
-The matcher currently uses **`all-MiniLM-L6-v2`** (384-d) — the dimension of
-`company_profiles.embedding`. The ensemble vision (adding `all-mpnet-base-v2`
-768-d and `multilingual-e5-large` 1024-d, stored in the generic `embeddings`
-table) stands but is not wired yet. All models load lazily on first use; no GPU.
+The matcher uses **`paraphrase-multilingual-MiniLM-L12-v2`** (384-d, multilingual —
+the TED corpus spans 24 languages) — the dimension of `company_profiles.embedding`.
+The ensemble vision (adding `all-mpnet-base-v2` 768-d and `multilingual-e5-large`
+1024-d, stored in the generic `embeddings` table) stands but is not wired yet. All
+models load lazily on first use; no GPU.
 
 The ML stack (`sentence-transformers`, `scikit-learn`, `joblib`) lives in a
 **separate `requirements-ml.txt`**, not the core runtime. Reason: `torch` is
@@ -43,11 +44,16 @@ runs (`POST /api/v1/matches/run/{id}` or `build_company_profiles`).
   deal-size range from past contract values; MiniLM embedding). Idempotent via
   `source_company_id` upsert key. No web scraping in the MVP — profiles are
   intentionally thin (a known scoring limitation).
-- **Layer 2 — matcher** (`pipeline.MatchingPipeline.run(tender_id)`): embeds the
-  tender once, hard-disqualifies, then scores each candidate on semantic
-  (cosine) + budget + location + qualification sub-scores, combines them with
-  default weights (`semantic 0.40 / budget 0.20 / location 0.20 / qualification
-  0.20`), and replaces that tender's `matches` rows (idempotent recompute).
+- **Layer 2 — matcher** (`pipeline.MatchingPipeline.run(tender_id)`): a v5-style
+  hard filter narrows the ~15k pool to ≤200, then **the default path scores each
+  candidate with a trained logistic regression** over 10 features
+  (`predict_proba` → calibrated win-probability, with per-feature contributions),
+  loaded from `exports/model_params.json` (or the feedback-retrained
+  `model_params_feedback.json` when present). The legacy fixed-weight combine
+  (`semantic 0.40 / budget 0.20 / location 0.20 / qualification 0.20`) remains as a
+  fallback and as the operator weight-override re-rank (G16). Replaces that tender's
+  `matches` rows idempotently (deleting dependent emails first to avoid the FK
+  violation — G26).
 - Embedder and weights are **injectable** so the pipeline's unit tests run
   without MiniLM/torch. Live-smoked 2026-06-16 — see
   [matching_pipeline_smoke_record.md](matching_pipeline_smoke_record.md).
@@ -58,36 +64,71 @@ Two recipient types share the `emails` table (`recipient_type` column):
 - **buyer** — per-tender digest to the tender issuer, anchored to its top match,
   recommending the ranked suppliers.
 
-Both drafts are currently **deterministic** (assembled from the match evidence,
-not yet Claude-written) so the flow is demonstrable without LLM cost/latency.
-The `EmailDrafter`/`EvidenceExtractor`/`EmailValidator` modules under
-`app/generation/` remain stubs; swapping the inline drafter for a Claude call is
-the planned upgrade.
+Both drafts are **Claude-written and evidence-grounded** (G10): `EvidenceExtractor`
+assembles the verifiable fact list, `EmailDrafter` (`claude-sonnet-4-6`) writes under
+an evidence constraint with a deterministic template fallback (missing key / SDK error
+/ validation failure), and `EmailValidator` is a structural guardrail. The agent's
+Draft-email action and the per-match / buyer endpoints all route through this one path.
+Stored drafts are listable via `GET /api/v1/emails/` (added 2026-07-01 so the UI shows
+real drafts, not bundled samples).
 
 ### LLM — Claude Sonnet 4.6 via Anthropic SDK
 Model id: `claude-sonnet-4-6`. Used for:
-- multi-step **agent orchestration** (`AgentController`, implemented)
-- the **reflection loop** (`Reflector`, daily/post-feedback narrative)
-- structured field extraction (understanding layer — still a stub)
-- evidence-grounded email drafting (planned upgrade — endpoints draft inline today)
+- multi-step **agent orchestration** (`AgentController`, reworked — see Agent below)
+- the **reflection loop** (`Reflector`, daily/post-feedback narrative; G9)
+- **structured field extraction** (Understanding layer `FieldExtractor`, G11 — live,
+  persists a `TenderProfile` to `tenders.tender_profile`)
+- **evidence-grounded email drafting** (`EmailDrafter`, G10 — live)
+
+Every LLM path is offline-safe: a deterministic fallback runs when no
+`ANTHROPIC_API_KEY` is configured, and tests inject fake clients.
 
 ### Agent — native Anthropic tool-use, planner-executor + reflection (`app/agent/`)
-Built on the native Anthropic SDK (no LangGraph/CrewAI — see
-[Notes.md](Notes.md)). `AgentController.run(goal)` runs a tool-use loop (max 20
-turns) over **6 tools**: `ingest_tenders`, `ingest_awards`, `download_dossiers`,
-`find_matches`, `draft_email`, `query_db`. Each run is persisted to the
-`agent_runs` table; `Reflector` summarises recent runs + feedback. Two safety
-decisions:
-- **`dry_run` defaults to `true`** on both `AgentController` and
-  `POST /api/v1/agent/run` — write-capable tools (`ingest_*`,
-  `download_dossiers`) validate inputs and report what *would* happen rather
-  than hitting live TED / writing the DB, so a casual chat goal can't trigger a
-  live poll. Pass `dry_run=false` to opt in.
-- **`query_db` is read-only** — gated to a single leading-`SELECT` statement
-  with a whole-word write-verb blocklist (`\binsert\b`, `\bcreate\b`, …). The
-  `\b` boundaries are deliberate so legitimate columns like `created_at` /
-  `updated_at` / `comment` aren't rejected (the original substring guard blocked
-  them — see [integration_gap_tracker.md](integration_gap_tracker.md) R6).
+Built on the native Anthropic SDK (no LangGraph/CrewAI — see [Notes.md](Notes.md)).
+**Reworked 2026-06-30/07-01 (G22 + G28) into a DB-first, streaming, resumable loop**
+after a live demo exposed that the old design hit live TED and ran a bulk dossier
+sweep *during a "dry run"*, drained Claude credits, and hung unkillably.
+
+**Flow (DB-first).** The agent resolves the tender locally, runs the deterministic
+matcher, and narrates the result: `find_tender` (local lookup by internal id, public
+`ted_notice_id`, or title — no network) → optional `extract_tender_profile` →
+`find_matches` (the trained-LR pipeline; the LLM never finds or invents a supplier,
+it only *picks the tool* and *explains the returned scores*) → grounded top-N
+explanation. `ask_user` pauses for disambiguation (e.g. a partial tender name that
+matched several tenders).
+
+**Tools** (`tools.py: AGENT_TOOLS`): `find_tender`, `find_matches`,
+`extract_tender_profile`, `draft_email`, `query_db`, `ask_user`, and the two **caged**
+ingest fallbacks `ingest_tenders` / `ingest_awards`. `download_dossiers` was **removed**
+from the agent surface (off-scope PDF scraping; it was the bulk sweep that hung).
+
+**Streaming + resumable.** The loop is a generator emitting Server-Sent Events
+(`status` / `step` / `awaiting_input` / `final` / `error`) so the UI shows live
+progress. The conversation persists to **`agent_sessions`** (migration `0014`), so an
+`ask_user` pause resumes via `POST /api/v1/agent/run/{id}/continue`. Endpoints:
+`POST /api/v1/agent/run` and `…/{id}/continue`, both SSE. Each completed run is also
+written to `agent_runs` for the reflection loop.
+
+**Post-run actions (G28).** The result card offers **Save results** → persists the
+narrative + a server-side snapshot of the ranked matches to **`tender_reports`**
+(migration `0015`), and **Draft email** with a 🥇/🥈/🥉 selector routing the chosen
+match to `POST /emails/{match_id}/generate`.
+
+**Safety decisions (post-rework):**
+- **Dry-run means NO network.** The caged `ingest_*` tools short-circuit before any
+  HTTP in dry-run and report what they *would* do; a live ingest is bounded
+  (capped days/months + row limit) and runs **at most once per run**, with
+  `ingest_awards` additionally gated on a prior zero-result `find_matches`. (The old
+  `dry_run` only skipped DB writes, not the live TED poll / portal sweep — the
+  demo-killer.)
+- **`query_db` is read-only AND savepoint-isolated** — a single leading-`SELECT`
+  with a whole-word write-verb blocklist (`\binsert\b`, `\bcreate\b`, …; the `\b`
+  boundaries spare legit columns like `created_at` — see
+  [integration_gap_tracker.md](integration_gap_tracker.md) R6), run inside a
+  `begin_nested()` SAVEPOINT so a bad query (the model guessing a wrong column)
+  can't poison the shared run transaction.
+- **Bounded loop** (max 20 turns → partial progress on overflow) keeps cost and
+  latency capped.
 
 ### REST API + frontend integration
 All seven v1 routers are implemented (tenders, awards, companies, matches,
@@ -110,10 +151,12 @@ TypeScript throughout. `openapi-typescript` will generate the API client
 from the FastAPI schema once the v1 routes are real.
 
 ### Scheduling — APScheduler in-process
-Lightweight, no broker dependency. Intended for a daily TED pull + weekly award
-back-fill. **Still a stub** (`app/ingestion/scheduler.py`) — ingestion runs via
-the `python -m app.ingestion` CLI for now; the scheduler just wraps that CLI when
-wired.
+Lightweight, no broker dependency. **Implemented (G13):** `IngestionScheduler`
+(`app/ingestion/scheduler.py`) wraps a `BackgroundScheduler` (UTC) with four cron
+jobs — contracts (daily), dossiers (daily), awards (weekly), reflect (daily) — wired
+into the FastAPI `lifespan`. **Opt-in** via `scheduler_enabled` (default off → CI /
+tests / a normal dev boot never poll TED). The `python -m app.ingestion` CLI still
+serves one-shot runs.
 
 ### CI — GitHub Actions
 Three jobs on every push / PR: backend pytest, frontend lint + build,
@@ -121,10 +164,14 @@ Alembic upgrade check against a real pgvector service container.
 
 ## Deferred / not in scope yet
 
-> Several items previously listed here shipped in the 2026-06-21→23 integration
-> sprints — see `docs/integration_gap_tracker.md` for the authoritative status.
-> **Now done:** APScheduler Job 4 (G13), the Understanding layer (G11), LR
-> retraining from feedback (G8), and Claude-written emails (G10).
+> Several items previously listed here shipped in the 2026-06-21→07-01 sprints —
+> see `docs/integration_gap_tracker.md` for the authoritative status. **Now done:**
+> APScheduler Job 4 (G13), the Understanding layer (G11), LR retraining from feedback
+> (G8), Claude-written emails (G10), the awards/companies/agent UI + persisted weights
+> (G15/G16), the **agent rework** (DB-first, streaming, resumable, caged tools — G22),
+> and the **agent result actions** (Save results → `tender_reports`, Draft-email
+> selector — G28). New tables since this doc's older snapshots: `reflections` (`0011`),
+> `agent_sessions` (`0014`), `tender_reports` (`0015`). Migration head **`0015`**.
 
 - **Web-scraped / enriched `company_profiles` ("demand side")** — profiles are
   derived from **past TED award winners only** (`profile_builder`), so the supplier

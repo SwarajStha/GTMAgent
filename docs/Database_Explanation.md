@@ -1,6 +1,6 @@
 # Database explanation
 
-Reference for teammates. Snapshot of the GTMAgent Postgres schema as of **2026-06-17** (branch `feat/pipeline-integration-ML-backend-frontend`, migrations `0001` → `0008` applied).
+Reference for teammates. Snapshot of the GTMAgent Postgres schema as of **2026-07-01** (migrations `0001` → `0015` applied). The 2026-06-17 base content below (sample rows, per-table prose) is kept; the table inventory, migration history, and the agent-table sections are updated to the current head.
 
 > Earlier snapshot (2026-05-17, migrations `0001`+`0002`) is preserved in the
 > sample-row blocks below — those small 5-row samples predate the full awards
@@ -9,28 +9,38 @@ Reference for teammates. Snapshot of the GTMAgent Postgres schema as of **2026-0
 ## At a glance
 
 - **Engine**: Postgres 16 with the `pgvector` extension (image `pgvector/pgvector:pg16`), running in Docker via `docker-compose.yml`.
-- **Schema management**: Alembic migrations in [backend/app/db/migrations/versions/](../backend/app/db/migrations/versions/). **Eight** migrations applied (`0001` → `0008`) — see [§ Migration history](#migration-history).
+- **Schema management**: Alembic migrations in [backend/app/db/migrations/versions/](../backend/app/db/migrations/versions/). **Fifteen** migrations applied (`0001` → `0015`) — see [§ Migration history](#migration-history).
 - **ORM**: SQLAlchemy 2.x typed `Mapped[]` models in [backend/app/db/models.py](../backend/app/db/models.py).
 - **Connection strings** (see [README](../README.md#connection-strings)):
   - `DATABASE_URL` — pooled, port `6543`, used by the FastAPI app at runtime.
   - `DATABASE_URL_DIRECT` — direct, port `5432`, used by Alembic only.
   - `DATABASE_URL_TEST` — direct, db `gtm_test`, used by the pytest fixtures.
 
-### Table inventory (11 tables + `alembic_version`)
+### Table inventory (14 tables + `alembic_version`)
+
+> Updated 2026-07-01: rows + columns below reflect migrations through `0015`. The
+> three tables added since the original 2026-06-17 snapshot — `reflections` (`0011`),
+> `agent_sessions` (`0014`), `tender_reports` (`0015`) — are listed at the end;
+> `tenders` gained `description` (`0012`) + `tender_profile` (`0013`), `matches`
+> gained 9 v5 feature columns (`0009`), and `feedback` gained `features` + a nullable
+> `match_id` (`0010`).
 
 | Table | Phase | Status | Purpose |
 |---|---|---|---|
-| `tenders` | 2 (Job 1) | **populated** (~10 rows) | Active EU procurement notices polled from TED |
+| `tenders` | 2 (Job 1) | **populated** (~3k rows) | Active EU procurement notices polled from TED |
 | `awards` | 2 (Job 2) | **populated** (~21k rows after full back-fill) | Historic contract awards from TED — who won what |
 | `companies` | 2 (Job 2) | **populated** (~15k rows) | Canonical legal entities resolved from award winners |
 | `documents` | 2 (Job 3) | **populated** | PDF tender dossiers (downloaded from `tenders.document_url`) + extracted text |
 | `company_profiles` | 3 | **populated** | Matchable supplier profiles (capability text + 384-d embedding), derived from award winners |
-| `matches` | 3 | **populated** | Tender × company-profile scoring results |
+| `matches` | 3 | **populated** | Tender × company-profile scoring results (+ 9 v5 LR feature cols, `0009`) |
 | `emails` | 4 | **populated** | Outreach drafts — supplier + buyer recipient types |
-| `feedback` | 5 | live (endpoint) | Thumbs-up/down ratings (drives future weight retraining) |
+| `feedback` | 5 | live (endpoint) | Thumbs-up/down ratings + feature snapshot (drives LR retraining) |
 | `embeddings` | future | empty | Generic vector store for cross-model embeddings |
-| `agent_runs` | 6 | live (agent) | Records each Claude agent execution (goal, steps, output) |
-| `alembic_version` | meta | n/a | Tracks which migration is currently applied (head: `0008`) |
+| `agent_runs` | 6 | live (agent) | Records each completed Claude agent execution (goal, steps, output) |
+| `reflections` | 6 (G9) | live | One row per reflection cycle (metrics / actions / narrative) — `0011` |
+| `agent_sessions` | 6 (G22) | live | Resumable agent conversation (messages/steps/pending/run_state) — `0014` |
+| `tender_reports` | 6 (G28) | live | Saved agent analyses (narrative + ranked-match snapshot, FK `tender_id`) — `0015` |
+| `alembic_version` | meta | n/a | Tracks which migration is currently applied (head: `0015`) |
 
 > Row counts above are the dev-DB state after the full awards back-fill (exported
 > to [`exports/`](../exports/README.md)). `tenders` / `company_profiles` /
@@ -349,21 +359,39 @@ Outreach drafts. Two recipient types share the table via `recipient_type`:
 - **`supplier`** — per-match outreach to the matched company (`POST /api/v1/emails/{match_id}/generate`).
 - **`buyer`** — per-tender digest recommending the top suppliers, anchored to the tender's top match (`POST /api/v1/emails/buyer/{tender_id}/generate`).
 
-Drafts are currently deterministic (assembled from match evidence), not yet Claude-written.
+Drafts are **Claude-written and evidence-grounded** (G10), with a deterministic template fallback. Listable via `GET /api/v1/emails/` (added 2026-07-01).
 
 Columns: `id UUID PK`, `match_id UUID FK→matches.id`, **`recipient_type VARCHAR(16)`** (`'supplier'`/`'buyer'`), **`tender_id INT FK→tenders.id (nullable)`**, `subject TEXT`, `body TEXT`, `evidence JSONB` (the tender/company/score context that grounded the draft), `status VARCHAR(32)` (default `'draft'`), `sent_at TIMESTAMPTZ`.
 
 ### `feedback` — Phase 5 (endpoint live)
 
-Thumbs-up/thumbs-down ratings on matches (+ optional email). `POST /api/v1/feedback` writes these; the LR weight-retraining job that consumes them is still pending.
+Thumbs-up/thumbs-down ratings on matches (+ optional email). `POST /api/v1/feedback` writes these; `FeedbackRetrainer` + `POST /api/v1/feedback/retrain` consume them to retrain the LR weights (G8).
 
-Columns: `id UUID PK`, `match_id UUID FK`, `email_id UUID FK (nullable)`, `rating SMALLINT` (+1 or −1), `comment TEXT`.
+Columns: `id UUID PK`, **`match_id UUID FK (nullable, ON DELETE SET NULL)`**, `email_id UUID FK (nullable)`, `rating SMALLINT` (+1 or −1), `comment TEXT`, **`features JSONB`** (10-feature snapshot taken at submit time, `0010`, so a row stays usable for retraining after its match is re-computed).
 
 ### `agent_runs` — Phase 6 (written by the agent)
 
-One row per `AgentController.run()` execution (including truncated runs). Powers the reflection loop, which reads recent runs + feedback.
+One row per completed agent run (including truncated ones). Powers the reflection loop, which reads recent runs + feedback.
 
 Columns: `id UUID PK`, `goal TEXT`, `steps JSONB` (the tool calls + args the agent made), `output TEXT`, `created_at`, `updated_at`.
+
+### `reflections` — Phase 6 / G9 (migration `0011`)
+
+One row per `Reflector.reflect()` cycle — the "wired-to-behaviour" record of a reflection.
+
+Columns: `id UUID PK`, `metrics JSONB` (run/feedback stats + per-CPV advisory), `actions JSONB` (e.g. the feedback→LR retrain outcome; CPV advice is advisory-only), `narrative TEXT` (Claude when a key is set, else deterministic), `created_at`, `updated_at`.
+
+### `agent_sessions` — Phase 6 / G22 (migration `0014`)
+
+A **resumable** agent conversation. When the agent calls `ask_user` (tender disambiguation) the loop pauses (`status='awaiting_input'`) and persists here; `POST /api/v1/agent/run/{id}/continue` resumes it.
+
+Columns: `id UUID PK`, `goal TEXT`, `dry_run BOOL`, `status VARCHAR(16)` (`running`/`awaiting_input`/`done`/`error`), `messages JSONB` (the Anthropic conversation array as plain dicts), `steps JSONB`, `pending JSONB` (the open `ask_user` question + `tool_use_id` + options), `run_state JSONB` (per-run guard counters: caged-ingest counts, zero-match flag), `created_at`, `updated_at`.
+
+### `tender_reports` — Phase 6 / G28 (migration `0015`)
+
+A **saved agent analysis** for a tender — the narrative + a self-contained snapshot of the ranked matches (survives a later re-match). History kept (many per tender). Read by the Tender-detail "Saved analyses" panel via `GET /api/v1/tenders/{id}/reports`.
+
+Columns: `id UUID PK`, **`tender_id INT FK→tenders.id (idx)`**, `session_id UUID FK→agent_sessions.id (nullable, SET NULL)`, `goal TEXT`, `narrative TEXT`, `suppliers JSONB` (top-N `{match_id, company_name, final_score, sub-scores}`), `created_at`, `updated_at`.
 
 ### `embeddings` — future
 
@@ -373,7 +401,7 @@ Columns: `id UUID PK`, `source_type VARCHAR(32) (idx)` (e.g. `'tender'`, `'compa
 
 ### `alembic_version` — meta
 
-Single-row table that records the migration head Alembic believes is applied. Today it should contain `0008_company_registration_id`.
+Single-row table that records the migration head Alembic believes is applied. Today it should contain `0015_tender_reports`.
 
 ```sql
 SELECT version_num FROM alembic_version;
@@ -395,7 +423,14 @@ If `alembic upgrade head` ever fails mid-migration, this row is what you check t
 | `0005_company_profile_source` | [0005](../backend/app/db/migrations/versions/0005_company_profile_source.py) | Added `company_profiles.source_company_id` (UNIQUE FK to `companies.id`) — the profile-builder's idempotent upsert key + bridge between the two sub-graphs. |
 | `0006_buyer_emails` | [0006](../backend/app/db/migrations/versions/0006_buyer_emails.py) | Added `emails.recipient_type` (`supplier`/`buyer`) + `emails.tender_id` to support the buyer-facing digest. |
 | `0007_award_enrichment` | [0007](../backend/app/db/migrations/versions/0007_award_enrichment.py) | Added 7 ML-enrichment columns to `awards` (`notice_title`, `description`, `procedure_type`, `nuts_code`, `winner_identifier`, `winner_country`, `contract_currency`). |
-| `0008_company_registration_id` | [0008](../backend/app/db/migrations/versions/0008_company_registration_id.py) | Added `companies.registration_id` (tax id); **relaxed** `canonical_name`/`resolution_key` from UNIQUE to plain indexes so identifier-first resolution can split/merge entities. Current **head**. |
+| `0008_company_registration_id` | [0008](../backend/app/db/migrations/versions/0008_company_registration_id.py) | Added `companies.registration_id` (tax id); **relaxed** `canonical_name`/`resolution_key` from UNIQUE to plain indexes so identifier-first resolution can split/merge entities. |
+| `0009_match_v5_features` | [0009](../backend/app/db/migrations/versions/0009_match_v5_features.py) | Added 9 v5 LR feature columns to `matches` (cpv-4/2-digit, nuts-exact/country, value, value-in-range, country-match, company-size, competition). Legacy 4 sub-scores kept as rollups. |
+| `0010_feedback_features` | [0010](../backend/app/db/migrations/versions/0010_feedback_features.py) | Added `feedback.features` (10-feature snapshot at submit time) + made `feedback.match_id` nullable / `ON DELETE SET NULL` so re-matching preserves training data (G8). |
+| `0011_reflections` | [0011](../backend/app/db/migrations/versions/0011_reflections.py) | Created `reflections` (one row per reflection cycle — `metrics`/`actions`/`narrative`, G9). |
+| `0012_tender_description` | [0012](../backend/app/db/migrations/versions/0012_tender_description.py) | Added `tenders.description` (TED BT-24) — feeds the matcher's tender embedding text. |
+| `0013_tender_profile` | [0013](../backend/app/db/migrations/versions/0013_tender_profile.py) | Added `tenders.tender_profile` JSONB — the Understanding layer's structured output (G11), source of `required_certifications` for the cert gate (G12). |
+| `0014_agent_sessions` | [0014](../backend/app/db/migrations/versions/0014_agent_sessions.py) | Created `agent_sessions` — resumable agent conversation (messages/steps/pending/run_state), backs the `ask_user` pause/resume (G22). |
+| `0015_tender_reports` | [0015](../backend/app/db/migrations/versions/0015_tender_reports.py) | Created `tender_reports` — saved agent analyses (narrative + ranked-match snapshot, FK `tender_id`, nullable FK `session_id`, G28). Current **head**. |
 
 **Forward pattern (Job 3+)**: new migration files only. Do NOT edit committed migrations in place. The Job 1 in-place edit was a one-time exception while the DB had no production data.
 

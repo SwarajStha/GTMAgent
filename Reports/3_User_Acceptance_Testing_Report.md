@@ -66,8 +66,21 @@ recording consent, and the seeded tenders used.]`
    top-3, edit it, rate it, and verify that every factual claim is supported by the
    evidence shown.
 
+4. **Agent mode (natural-language operation).** Instead of clicking through Scenarios
+   1–3, state a single plain-language goal (e.g. *"find the top 3 suppliers for the
+   Ilmenau school tender and explain why"*). Observe whether the agent resolves the
+   right tender (including handling the **disambiguation prompt** when the name is
+   partial), whether the streamed progress is understandable, and whether the result's
+   **Save results** / **Draft email** actions do what the user expects.
+
 A sixth participant (cold-start, never briefed) runs Scenario 1 only, as a test of
 onboarding and the User Guide.
+
+> **Why test agent mode separately.** It is the product's most novel interaction and
+> its highest-trust surface (the user delegates the *steps*, not just the analysis), so
+> the UAT specifically probes: did the agent ask before doing anything ambiguous, and
+> was it transparent about what it did? `[NEEDS INPUT: capture per-participant notes on
+> whether they trusted the agent to drive vs. preferred manual clicking.]`
 
 ### 2.3 What we evaluate (metrics)
 
@@ -78,6 +91,7 @@ onboarding and the User Guide.
 | **Lead quality** (perceived) | 1–5: "the surfaced companies are plausible bidders" |
 | **Explanation trust** | 1–5: "I understand and trust why a company was ranked" |
 | **Email usability** | 1–5: "I could send this with minor edits" + count of factual errors found |
+| **Agent trust & transparency** | 1–5: "the agent did what I asked and I understood what it did"; + did it ask before any ambiguous action? (yes/no) |
 | **Overall usefulness / NPS** | 1–10 likelihood to recommend |
 | **Qualitative** | Top friction points, confusions, missing features (open notes) |
 
@@ -92,14 +106,14 @@ onboarding and the User Guide.
 > when sessions ran, with how many participants, on which build/commit, and any
 > deviations from the plan. Keep raw per-user data in an appendix or CSV.]`
 
-| Participant | Role / sector | Scenario 1 | Scenario 2 | Scenario 3 | Time (min) |
-|---|---|:--:|:--:|:--:|:--:|
-| P1 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | — |
-| P2 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | — |
-| P3 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | — |
-| P4 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | — |
-| P5 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | — |
-| P6 (cold-start) | `[NEEDS INPUT]` | ⬜ | n/a | n/a | — |
+| Participant | Role / sector | Sc.1 | Sc.2 | Sc.3 | Sc.4 (agent) | Time (min) |
+|---|---|:--:|:--:|:--:|:--:|:--:|
+| P1 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| P2 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| P3 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| P4 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| P5 | `[NEEDS INPUT]` | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| P6 (cold-start) | `[NEEDS INPUT]` | ⬜ | n/a | n/a | ⬜ | — |
 
 ---
 

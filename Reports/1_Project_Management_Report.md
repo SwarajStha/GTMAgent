@@ -173,7 +173,7 @@ logical sub-systems.
 │ profile_build │              │ EvidenceExtractor  │        │ controller       │
 │ embedder      │   matches    │ EmailDrafter(Claude)│       │ (planner-        │
 │ semantic+rules│─────────────►│ EmailValidator     │        │  executor loop)  │
-│ LR (features) │              │ supplier + buyer   │        │ 6 tools          │
+│ LR (features) │              │ supplier + buyer   │        │ 8 tools (SSE)    │
 └───────────────┘              └────────────────────┘        └──────────────────┘
         ▲                                 │                             │
         │ feedback retrains weights       │ drafts                      │ orchestrates
@@ -221,11 +221,11 @@ logical sub-systems.
    fallback; `EmailValidator` rejects any draft introducing unsupported claims.
 
 6. **Agent** (`app/agent/`). A native Anthropic tool-use planner-executor loop
-   (max 20 turns) over six tools (`ingest_tenders`, `ingest_awards`,
-   `download_dossiers`, `find_matches`, `draft_email`, `query_db`). Two safety
-   guards: write-capable tools default to `dry_run=true`, and `query_db` is
-   restricted to a single read-only `SELECT`. Runs persist to `agent_runs`; a
-   `Reflector` summarises recent runs and feedback.
+   (max 20 turns) that is **DB-first, streaming, and resumable** (see §3.4). It
+   resolves a tender locally, runs the deterministic matcher, and narrates the
+   result; the LLM only chooses tools and explains scores — it never ranks. Runs
+   stream as Server-Sent Events and persist to `agent_sessions` (resumable) and
+   `agent_runs` (audit); a `Reflector` summarises recent runs and feedback.
 
 7. **API + frontend.** Seven FastAPI v1 routers (tenders, awards, companies,
    matches, emails, feedback, agent) with auto-generated OpenAPI docs; a Vue 3 +
@@ -234,12 +234,37 @@ logical sub-systems.
 
 ### 3.3 Data model (selected)
 
-Eleven tables in a single PostgreSQL schema. The hot path uses pgvector: a
+Fourteen tables in a single PostgreSQL schema. The hot path uses pgvector: a
 384-dimensional embedding column on `company_profiles` for fast cosine
 similarity, with a generic 768-dimensional `embeddings` table reserved for
 cross-model storage. Award winners (`companies`) and capability profiles
 (`company_profiles`) are kept as two tables by design — different lifecycles and
 key types. Full schema documentation is in `docs/Database_Explanation.md`.
+
+### 3.4 Agent mode (DB-first orchestration)
+
+The agent is the system's natural-language front door: a user states a goal
+(*"find the top 3 suppliers for the Ilmenau school tender and explain why"*) and the
+agent drives the pipeline. Its design follows three rules learned from a live demo
+that the earlier version failed:
+
+- **DB-first, not source-first.** The data is already ingested, so the agent
+  *resolves* the named tender against the local database (`find_tender` — accepts the
+  internal id, the public TED notice id, or title text) rather than fetching from TED.
+  A partial name that matches several tenders triggers `ask_user`, which **pauses** the
+  run for the user to pick; the conversation is persisted (`agent_sessions`) and
+  resumed on their choice.
+- **The LLM orchestrates; classical ML ranks.** `find_matches` runs the trained
+  logistic-regression pipeline (§4.2); the LLM only selects the tool and explains the
+  returned scores. It cannot introduce a company that isn't in the pool.
+- **Bounded and offline-by-default.** The two network tools (`ingest_tenders`,
+  `ingest_awards`) are *caged*: in dry-run they make **no** network call, and live they
+  are bounded and run at most once per goal. The destructive bulk dossier sweep was
+  removed from the agent entirely. (See the Safety report §1.2 for the full guard set.)
+
+The run streams live progress to the UI as Server-Sent Events, and the result offers
+two one-click actions: **Save results** (persists the analysis to `tender_reports`)
+and **Draft email** to any of the top-3 matches.
 
 ---
 
@@ -308,10 +333,12 @@ GenAI is used in three places, each with a deliberate prompting strategy:
   tender's language automatically (verified live: a German tender produced a
   German email citing only real facts).
 
-- **Agent orchestration.** A planner-executor system prompt defines the goal,
-  the six available tools (as JSON schemas), and the safety constraints
-  (dry-run-by-default, read-only SQL). Tool definitions and the system prompt are
-  stable across turns to benefit from prompt caching.
+- **Agent orchestration.** A planner-executor system prompt defines the goal, the
+  tool set (as JSON schemas), and the safety constraints (DB-first resolution,
+  offline-by-default ingest, read-only SQL, `ask_user` for ambiguity). Tool
+  definitions and the system prompt are stable across turns to benefit from prompt
+  caching; the messages persist to `agent_sessions` so a paused run resumes exactly
+  where it left off.
 
 > `[TEAM DECISION: include 1–2 verbatim prompt excerpts (extraction + email) in
 > an appendix? The rubric explicitly grades the prompt-engineering discussion.]`
@@ -357,7 +384,7 @@ torch-free.
 
 ## 6. Current Progress and Future Plans
 
-### 6.1 Current progress (as of 2026-06-21)
+### 6.1 Current progress (as of 2026-07-01)
 
 | Component | Status |
 |---|---|
@@ -365,11 +392,13 @@ torch-free.
 | TED contract-notice ingestion | **Done — live-verified** |
 | Award back-fill + entity resolution | **Done — ~21k awards / ~15k companies (24 months)** |
 | Dossier downloader + ingestion CLI | **Done — live-verified** |
+| Understanding layer (Claude `FieldExtractor`) | **Done — `TenderProfile` persisted (G11)** |
 | Matching (hybrid + trained LR mode) | **Done — live-smoked; unified v5 model serving** |
 | Two-sided email generation (Claude) | **Done — evidence-grounded, live-verified** |
 | Feedback capture + LR retraining | **Done** |
-| Agent (planner-executor + reflection) | **Done — 6 tools** |
-| REST API (7 routers) + Vue dashboard | **Done — with sample-data fallback** |
+| Scheduler (APScheduler, opt-in) + reflection loop | **Done (G13/G9)** |
+| Agent (DB-first, streaming, resumable; result actions) | **Done — reworked G22/G28, live-smoked** |
+| REST API (7 routers) + Vue dashboard (7 views) | **Done — with sample-data fallback** |
 | ML training dataset export | **Done** |
 
 The headline integration achievement was unifying two matchers — a simple
@@ -380,18 +409,20 @@ by Claude.
 
 ### 6.2 Known limitations and future plans
 
-- **APScheduler loop (Job 4)** — ingestion runs via CLI; the in-process scheduler
-  is a stub.
-- **Understanding layer** — the Claude `FieldExtractor` is not yet wired, which
-  also blocks a certification-based disqualifier gate.
-- **Reflection → behaviour** — the reflector narrates but does not yet feed
-  adjusted weights/filters back automatically.
-- **Frontend depth** — no awards/companies/agent UI; weight sliders are partly
-  cosmetic.
-- **Auth / multi-tenancy** — Phase 5, not started.
 - **Web-scraped capability profiles** — profiles are derived from award history
   only (thin); per-portal dossier scraping is deferred behind an adapter-registry
-  design.
+  design. This fixed supplier pool is also *why* the certification disqualifier gate,
+  though fully wired to the Understanding layer, stays inert in production (award data
+  carries no supplier-certification field).
+- **Auth / multi-tenancy** — Phase 5, not started.
+- **Verified outreach contacts** — TED carries no supplier email, so supplier
+  recipients are website-derived and flagged *unverified* rather than fabricated.
+- **Backtest KPI numbers** — to be finalised from a fresh run (§7).
+
+> *Resolved since the 2026-06-21 draft:* the APScheduler loop (G13), the Understanding
+> layer + cert gate (G11/G12), reflection→behaviour wiring (G9), the awards/companies/
+> agent UI + persisted weights (G15/G16), and the agent rework + result actions
+> (G22/G28) all shipped — see `docs/integration_gap_tracker.md`.
 - **Future-work candidates** (catalogued, not committed): Vision-LLM blueprint
   parsing; Neo4j incumbency knowledge graph; embedding ensemble (adding
   `all-mpnet-base-v2` and `multilingual-e5-large`).

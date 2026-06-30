@@ -13,9 +13,9 @@
 ## 1. Safety of GenAI
 
 GTM Agent uses GenAI in three roles — orchestration agent, evidence-grounded email
-drafting, and (planned) structured field extraction — and uses open-source ML for
-ranking. Each role introduces specific risks, which the team addressed with
-concrete, code-level mitigations rather than policy statements alone.
+drafting, and structured field extraction (the Understanding layer) — and uses
+open-source ML for ranking. Each role introduces specific risks, which the team
+addressed with concrete, code-level mitigations rather than policy statements alone.
 
 ### 1.1 Hallucination and factual integrity (highest-priority risk)
 
@@ -44,20 +44,38 @@ wrong — the sales rep loses credibility on the first call.
 **Risk.** A tool-use agent that can ingest data, write to the database, and call
 external APIs could take destructive or expensive actions from a casual prompt.
 
-**Mitigations (implemented).**
+**A real incident that hardened the design (worth stating honestly).** An early
+version relied on a single guard — `dry_run=true` by default — believed to make the
+write-capable tools safe. A live demo proved it insufficient: `dry_run` only skipped
+the *database write*, not the *network*, so a casual goal naming a tender in prose led
+the agent to a live multi-thousand-notice TED poll **and** a bulk document-portal
+sweep, draining LLM credits and hanging the request. This surfaced a general lesson —
+*a safety flag is only as good as the narrowest thing it actually gates* — and the
+agent was reworked into a layered guard set:
 
-- **Dry-run by default.** Write-capable tools (`ingest_tenders`, `ingest_awards`,
-  `download_dossiers`) default to `dry_run=true` — they validate inputs and report
-  what *would* happen rather than acting. Live execution requires an explicit
-  opt-in.
-- **Read-only database tool.** `query_db` is restricted to a single leading
-  `SELECT` with a whole-word write-verb blocklist (`insert`, `update`, `delete`,
-  `drop`, `alter`, `truncate`, `create`) and a 50-row cap, so the agent cannot
+- **Dry-run now means NO network.** The two remaining network tools (`ingest_tenders`,
+  `ingest_awards`) short-circuit before any HTTP call in dry-run and report what they
+  *would* do. A live run is **bounded** (capped look-back window + row limit) and
+  permitted **at most once per goal**, and `ingest_awards` is additionally gated on a
+  prior empty match result. The destructive bulk-download tool was **removed** from the
+  agent entirely.
+- **DB-first by construction.** The agent resolves a tender against the *local*
+  database and runs the deterministic matcher; it has no general "go fetch from the
+  internet" capability, so the default behaviour is inherently offline.
+- **Human-in-the-loop on ambiguity.** When a request is ambiguous (e.g. a partial
+  tender name), the agent **pauses and asks the user to choose** rather than guessing —
+  a confirmation step before it commits to a tender.
+- **Read-only, transaction-isolated database tool.** `query_db` is restricted to a
+  single leading `SELECT` with a whole-word write-verb blocklist (`insert`, `update`,
+  `delete`, `drop`, `alter`, `truncate`, `create`) and a 50-row cap, and runs inside a
+  savepoint so even a malformed query cannot corrupt the session — the agent cannot
   mutate or exfiltrate data at scale.
-- **Bounded loops.** The agent loop is capped (max 20 turns) and returns partial
-  progress on overflow rather than running unbounded.
-- **Auditability.** Every agent run (including truncated ones) is persisted to an
-  `agent_runs` table for review.
+- **Bounded loops + auditability.** The loop is capped (max 20 turns, partial progress
+  on overflow); every run persists to `agent_runs`, and the full resumable conversation
+  to `agent_sessions`, for review.
+
+The takeaway, reinforced in §2, is that agent safety came from **removing capabilities
+and constraining defaults**, not from trusting a single flag.
 
 ### 1.3 Prompt injection from untrusted content
 
@@ -139,11 +157,20 @@ documents).
   knowledge graph, an embedding ensemble) were correctly deferred to Future Work;
   the temptation to build them mid-project was real. *Lesson:* a written
   Future-Work list is an active scope-management tool, not a footnote.
-- **The understanding layer remains a stub.** The structured `FieldExtractor` was
-  de-prioritised; the matcher reads columns/dossier text directly. *Lesson:* be
-  explicit early about which "planned" components are actually MVP-critical.
+- **Sequencing "planned" components.** The structured `FieldExtractor` (Understanding
+  layer) was de-prioritised for much of the project — the matcher read columns/dossier
+  text directly — and only wired in late (G11). *Lesson:* be explicit early about which
+  "planned" components are MVP-critical vs. deferrable, so the late ones land calmly
+  rather than under deadline pressure.
 - **Thin capability profiles** cap semantic quality, because profiles are built
   from award history rather than scraped company sites. A known, documented ceiling.
+- **A safety flag only gates the one thing it actually wraps.** The agent's
+  `dry_run` was assumed to make the write tools safe, but it only skipped DB writes,
+  not the live network calls — exposed by a live demo that hung and burned credits
+  (§1.2). *Lesson:* test the guard against the exact failure you fear (here, "does a
+  dry run touch the network?"), and prefer **removing dangerous capabilities** over
+  trusting a flag. The reworked agent (DB-first, caged/bounded ingest, human-in-the-loop
+  on ambiguity, streaming + resumable) is both safer and more usable as a result.
 
 ### 2.3 Insights about GenAI
 

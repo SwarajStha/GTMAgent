@@ -55,6 +55,10 @@ The dashboard follows a simple three-column flow:
 4. **Generate an outreach email** (or a buyer digest) and edit it.
 5. **Rate the result** 👍/👎 — the system learns from your feedback.
 
+**Agent mode (shortcut):** prefer to just *say what you want*? The built-in agent does
+steps 1–4 from a single sentence and asks you to confirm if anything is ambiguous —
+see §4.6.
+
 `[SCREENSHOT: three-column workflow]`
 
 ---
@@ -123,16 +127,34 @@ your team actually considers a good lead.
 
 `[SCREENSHOT: feedback control]`
 
-### 4.6 The agent (power users)
+### 4.6 Agent mode (power users)
 
-Instead of clicking through the steps, you can give the built-in agent a
-plain-language goal — for example, *"find the top 3 supplier matches for the
-Krankenhaus Wittmund clinic tender and draft an email for the best one."* The
-agent plans and executes the steps and narrates what it did. For safety, actions
-that would write data or contact TED run in a **dry-run preview mode by default**;
-you opt in explicitly to run them for real.
+Instead of clicking through the steps, you can give the built-in **agent** a
+plain-language goal — for example, *"find the top 3 supplier matches for the Ilmenau
+school tender and explain why."* The agent figures out the steps, runs them, and shows
+you a **live activity log** as it works ("Looking up the tender…", "Ranking the
+supplier pool…", "Writing the summary…").
 
-`[SCREENSHOT: agent run]`
+What makes it reliable and safe to use:
+
+- **It understands any way you name a tender.** Give it the internal id, the public
+  **TED notice number** (e.g. `420398-2026`), or just words from the title. If your
+  wording matches several tenders, the agent **stops and asks you to pick one** from a
+  short list — then continues from your choice (you never have to restate the goal).
+- **The ranking is the trained model, not the chatbot.** The agent runs the same
+  matching pipeline the manual flow uses; the AI only decides *which step to run* and
+  *explains the result*. It cannot invent a company.
+- **It works on your local data and won't surprise you.** By default it only uses
+  tenders/companies already loaded — the **"Offline mode"** toggle (on by default)
+  means it makes no live calls to the EU TED service.
+- **One-click follow-ups.** When the agent finishes, you can **Save results** (the
+  ranked suppliers + explanation are stored against that tender and viewable later
+  under *Saved analyses*) and **Draft email** to any of the top-3 matches — you pick
+  🥇, 🥈, or 🥉; it confirms *"Email written with [company]"* and links you to the
+  Emails screen.
+
+`[SCREENSHOT: agent run — live activity log + disambiguation picker]`
+`[SCREENSHOT: agent result — Save results + 🥇/🥈/🥉 Draft-email buttons]`
 
 ---
 
@@ -184,6 +206,11 @@ tender's language.
 
 **What sectors are covered?** Construction and IT/services by default, configurable
 by CPV code. `[NEEDS INPUT: confirm the final shipped sector list.]`
+
+**Can the agent take actions on its own?** No surprising ones. The agent ranks and
+explains using data already in the system, asks you before proceeding when a request is
+ambiguous, and never contacts the EU TED service in the default "Offline mode" — and it
+never sends an email (it only drafts).
 
 ---
 

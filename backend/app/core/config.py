@@ -106,6 +106,18 @@ class Settings(BaseSettings):
             "wedge the connection."
         ),
     )
+    database_url_readonly: str = Field(
+        default="",
+        description=(
+            "OPTIONAL connection string for a least-privilege, non-superuser, "
+            "read-only role (e.g. gtm_ro). When set, the agent's `query_db` tool "
+            "runs on THIS connection instead of the app's superuser session, so "
+            "Postgres itself refuses file access / writes / catalog secrets — the "
+            "structural P2 guarantee behind the query_db guard. When empty, "
+            "query_db falls back to the guarded shared session. Provision the "
+            "role with backend/scripts/create_readonly_role.sql."
+        ),
+    )
 
     # ── Scheduler (Job 4 / G13) ───────────────────────────────────────────────
     # The in-process APScheduler loop is OPT-IN. Default False so CI, tests, and a

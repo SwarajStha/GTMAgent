@@ -262,6 +262,43 @@ def _read_only_sql_error(sql: str) -> str | None:
     return None
 
 
+def _run_query_readonly(engine, sql: str, timeout_ms: int) -> str:
+    """Execute `sql` on the least-privilege read-only engine (own connection).
+
+    The role is a non-superuser with SELECT-only grants and
+    `default_transaction_read_only`, so writes / file access / catalog secrets are
+    refused by Postgres — the structural guarantee behind the app-layer guard. We
+    also assert read-only + a statement timeout on the transaction as belt-and-
+    suspenders in case the role was provisioned without those defaults."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn, conn.begin():
+        # SET TRANSACTION READ ONLY must be the first statement in the txn.
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        conn.execute(text(f"SET LOCAL statement_timeout = {int(timeout_ms)}"))
+        rows = conn.execute(text(sql)).mappings().fetchmany(50)
+    return str([dict(row) for row in rows])
+
+
+def _run_query_on_session(session, sql: str, timeout_ms: int) -> str:
+    """Fallback path when no read-only role is configured: run on the agent's
+    shared session inside a SAVEPOINT.
+
+    The agent shares ONE session for both tool execution and its own state
+    persistence, so a bad query (the model guessing a wrong column/table) would
+    otherwise poison the whole run transaction. The savepoint rolls back only the
+    failed statement, leaving the run recoverable. `SET LOCAL statement_timeout`
+    bounds a slow/looping SELECT; the value is a sanitized int, safe to inline
+    (SET takes no bound parameter). Results are capped so a large table can't
+    bloat the output fed to the model."""
+    from sqlalchemy import text
+
+    with session.begin_nested():
+        session.execute(text(f"SET LOCAL statement_timeout = {int(timeout_ms)}"))
+        rows = session.execute(text(sql)).mappings().fetchmany(50)
+    return str([dict(row) for row in rows])
+
+
 def _fmt_tender(tender) -> str:
     title = tender.title or "(no title)"
     country = tender.buyer_country or "?"
@@ -398,31 +435,25 @@ def dispatch_tool(
         return _find_tender(session, str(tool_args.get("query", "")).strip())
 
     if tool_name == "query_db":
-        from sqlalchemy import text
+        from app.core.config import get_settings
+        from app.db.session import get_readonly_engine
 
         sql = str(tool_args.get("sql_query", ""))
         reason = _read_only_sql_error(sql)
         if reason is not None:
             return f"Error executing query: {reason}."
+        clean_sql = sql.strip().rstrip(";")
+        timeout_ms = int(get_settings().query_db_statement_timeout_ms)
         try:
-            from app.core.config import get_settings
-
-            # Run inside a SAVEPOINT: the agent shares ONE session for both tool
-            # execution and its own state persistence, so a bad query (e.g. the
-            # model guessing a wrong column/table) would otherwise poison the whole
-            # run transaction ("current transaction is aborted"). The savepoint
-            # rolls back only the failed statement, leaving the run recoverable.
-            # Cap results so a large table can't bloat the output fed to the model.
-            timeout_ms = int(get_settings().query_db_statement_timeout_ms)
-            with session.begin_nested():
-                # Bound this query's runtime so a slow/looping SELECT (e.g. a
-                # runaway join, or a pg_sleep that slipped the guard) can't wedge
-                # the connection. SET LOCAL is scoped to the surrounding txn and
-                # rolls back with the savepoint. The value is a sanitized int, so
-                # it is safe to inline (SET does not accept a bound parameter).
-                session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
-                rows = session.execute(text(sql.strip().rstrip(";"))).mappings().fetchmany(50)
-            return str([dict(row) for row in rows])
+            ro_engine = get_readonly_engine()
+            if ro_engine is not None:
+                # Structural P2 guarantee: run on a dedicated least-privilege
+                # read-only role (own connection). Postgres itself refuses writes,
+                # file access, and catalog secrets regardless of the app-layer
+                # guard, and the separate connection can't poison the agent's
+                # transaction, so no savepoint is needed here.
+                return _run_query_readonly(ro_engine, clean_sql, timeout_ms)
+            return _run_query_on_session(session, clean_sql, timeout_ms)
         except Exception as e:  # noqa: BLE001
             return f"Error executing query: {str(e)}"
 

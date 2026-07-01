@@ -87,6 +87,87 @@ def test_query_db_dispatch_blocks_dangerous_function() -> None:
     assert "disallowed" in out.lower()
 
 
+# ── read-only-engine routing (P2 structural fix) ─────────────────────────────
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def fetchmany(self, n):
+        return self._rows[:n]
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self._rows = rows
+        self.executed: list[str] = []
+
+    def execute(self, stmt):
+        s = str(stmt)
+        self.executed.append(s)
+        return _FakeResult([] if s.strip().lower().startswith("set") else self._rows)
+
+    def begin(self):
+        conn = self
+
+        class _Tx:
+            def __enter__(self_inner):
+                return conn
+
+            def __exit__(self_inner, *a):
+                return False
+
+        return _Tx()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, rows):
+        self.conn = _FakeConn(rows)
+
+    def connect(self):
+        return self.conn
+
+
+def test_query_db_uses_readonly_engine_when_configured(monkeypatch) -> None:
+    """When a read-only engine is configured, query_db runs on ITS connection —
+    asserting read-only + a statement timeout — and never touches the agent's
+    shared session (no savepoint), so a bad query can't poison the run."""
+    fake = _FakeEngine([{"n": 1}])
+    monkeypatch.setattr("app.db.session.get_readonly_engine", lambda: fake)
+
+    session = MagicMock()
+    out = dispatch_tool("query_db", {"sql_query": "SELECT 1 AS n"}, session)
+
+    assert "{'n': 1}" in out
+    session.begin_nested.assert_not_called()
+    session.execute.assert_not_called()
+    joined = " ".join(fake.conn.executed).lower()
+    assert "set transaction read only" in joined
+    assert "statement_timeout" in joined
+
+
+def test_query_db_falls_back_to_session_without_readonly(monkeypatch) -> None:
+    """Default (no read-only role configured): query_db uses the shared session
+    inside a savepoint — the guarded fallback path."""
+    monkeypatch.setattr("app.db.session.get_readonly_engine", lambda: None)
+
+    session = MagicMock()
+    session.execute.return_value.mappings.return_value.fetchmany.return_value = []
+    out = dispatch_tool("query_db", {"sql_query": "SELECT 1"}, session)
+
+    assert out == "[]"
+    session.begin_nested.assert_called_once()
+
+
 def test_query_db_runs_timestamp_columns_real_db(db_session) -> None:
     """End-to-end: SELECTs touching `created_at` (companies) and `updated_at`
     (tenders) must execute, not be rejected. These are the columns the old

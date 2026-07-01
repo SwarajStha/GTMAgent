@@ -45,6 +45,35 @@ The connection string is configurable via `DATABASE_URL_TEST` in `backend/.env` 
 
 ---
 
+## Least-privilege role for the agent `query_db` tool (P2 hardening)
+
+The app connects as `gtm`, which the pgvector image creates as a **superuser**. The agent's read-only `query_db` tool is guarded at the app layer (single `SELECT`, dangerous-function blocklist, statement timeout), but the *structural* guarantee is to run those queries under a dedicated non-superuser, read-only role so Postgres itself refuses file access (`pg_read_file`), credential reads (`pg_authid`), and writes — regardless of the app guard.
+
+One-time provisioning, with the dev container running:
+
+```powershell
+docker exec -i gtmagent-db-1 psql -U gtm -d gtm < backend\scripts\create_readonly_role.sql
+```
+
+Then point the app at the role by adding to `backend/.env`:
+
+```
+DATABASE_URL_READONLY=postgresql+psycopg://gtm_ro:gtm_ro@localhost:6543/gtm
+```
+
+Restart the backend. `query_db` now runs on the `gtm_ro` connection; everything else keeps using `gtm`. **When `DATABASE_URL_READONLY` is unset (the default), `query_db` falls back to the guarded shared session** — still safe via the app-layer guard + timeout, just without the DB-level guarantee. So this is opt-in and dev/CI/tests are unaffected.
+
+Verify the role is correctly locked down (all but the first should be **denied**):
+
+```powershell
+docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "SELECT count(*) FROM tenders;"          # OK
+docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "SELECT pg_read_file('/etc/passwd');"     # permission denied
+docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "SELECT rolpassword FROM pg_authid;"      # permission denied
+docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "CREATE TABLE x (i int);"                 # read-only transaction
+```
+
+---
+
 ## ted_smoke.py
 
 End-to-end exerciser for the Phase 2 / Job 1 TED Contract Notice poller. Useful for:

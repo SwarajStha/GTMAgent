@@ -187,6 +187,38 @@ def test_continue_unknown_session_errors(db_session):
     assert events and events[-1]["type"] == "error"
 
 
+class _RaisingClient:
+    """Fake client whose Anthropic call raises — simulates an API/network failure."""
+
+    class _Messages:
+        def create(self, *args, **kwargs):
+            raise RuntimeError("boom: upstream API failed")
+
+    def __init__(self):
+        self.messages = self._Messages()
+
+
+def test_midrun_failure_marks_session_error(db_session):
+    """If the Anthropic call raises, the run must surface an `error` event AND flip
+    the session out of `running` — otherwise it's a dangling, un-resumable row."""
+    agent = AgentController(client=_RaisingClient(), dry_run=True)
+    events = list(agent.stream_run("Do something that fails upstream"))
+
+    err = events[-1]
+    assert err["type"] == "error"
+    assert "boom: upstream API failed" in err["message"]
+
+    session_id = err["session_id"]
+    db_session.expire_all()
+    sess = db_session.get(AgentSession, uuid.UUID(session_id))
+    assert sess is not None
+    assert sess.status == "error"
+
+    # A dangling-error session cannot be resumed (status guard rejects it).
+    resume = list(agent.stream_continue(session_id, "anything"))
+    assert resume and resume[-1]["type"] == "error"
+
+
 def test_bad_query_db_does_not_poison_the_run(db_session):
     """A failing query_db (e.g. the model guessing a wrong table/column) must not
     abort the shared run transaction — the savepoint rolls it back and the run

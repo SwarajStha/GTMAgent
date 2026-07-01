@@ -25,14 +25,71 @@ from app.agent import progress
 from app.agent.tools import AGENT_TOOLS, dispatch_tool
 from app.db.models import AgentRun, AgentSession
 
-SYSTEM_PROMPT = """You are the GTM Agent Orchestrator for a construction-tech B2B \
+SCHEMA_REFERENCE = """DATABASE SCHEMA (for the `query_db` tool — PostgreSQL).
+
+Use `query_db` for questions the purpose-built tools do NOT cover — e.g. aggregations,
+rankings, or history across many tenders/awards/companies ("which buyers awarded the
+most contracts", "top companies by total contract value", "how many tenders per
+country"). `query_db` accepts ONE read-only `SELECT` statement (no `;` chaining, no
+writes), and returns at most 50 rows — always add an explicit `ORDER BY` + `LIMIT`.
+
+Tables and their key columns:
+
+- tenders (procurement notices; PK `id` int)
+    id, ted_notice_id (public TED id, text), title, description, buyer_name,
+    buyer_country (alpha-3, e.g. 'DEU'), cpv_codes (JSONB array of text),
+    deadline (timestamptz), budget_eur (float, often NULL), currency, status,
+    is_restricted (bool), tender_profile (JSONB, NULL until extracted), ingested_at.
+
+- awards (past TED contract-award notices — the source of the supplier pool; PK `id` int)
+    id, ted_notice_id, cpv_code, notice_title, description, procedure_type, nuts_code,
+    buyer_name, buyer_country, winner_raw_name (as printed on the notice),
+    winner_identifier (tax id), winner_country, winner_canonical_id (FK -> companies.id,
+    NULLABLE), contract_value_eur (float), contract_currency, award_date (date),
+    n_offers_received (int). NO FK to tenders (awards and tenders are separate TED
+    publications).
+
+- companies (canonical legal entities resolved from award winners; PK `id` int)
+    id, canonical_name, resolution_key, registration_id (tax id), aliases (JSON), country.
+
+- company_profiles (the MATCHABLE supplier pool, with embeddings; PK `id` uuid)
+    id, name, country, website, capabilities (JSONB), certifications (JSONB),
+    source_company_id (FK -> companies.id).
+
+- matches (pipeline output; PK `id` uuid)
+    id, tender_id (FK -> tenders.id), company_id (FK -> company_profiles.id),
+    semantic_score, budget_score, location_score, qualification_score, final_score,
+    is_disqualified (bool), weights (JSONB), explanation.
+
+- emails (PK `id` uuid): id, match_id (FK -> matches.id), recipient_type
+    ('supplier'|'buyer'), tender_id, subject, body, status, sent_at.
+
+- feedback (PK `id` uuid): id, match_id (FK -> matches.id, nullable), rating (smallint,
+    +1 / -1), comment.
+
+Query gotchas — respect these or the answer will be wrong:
+- To rank/aggregate WINNERS as entities, group by `awards.winner_canonical_id` (and join
+  `companies` for the name), NOT by `winner_raw_name` (spelling varies) — but note some
+  awards have `winner_canonical_id IS NULL`.
+- `awards.contract_value_eur` is NOT FX-converted despite its name — it is in
+  `contract_currency`. Do not SUM across mixed currencies without filtering
+  (e.g. `WHERE contract_currency = 'EUR'`), and treat `-1` / `0` as "not disclosed".
+- `companies` (award winners) and `company_profiles` (matchable pool) are DIFFERENT
+  tables — join via `company_profiles.source_company_id = companies.id` if you must bridge.
+- `tenders.cpv_codes` is a JSONB array; use JSONB operators (e.g.
+  `cpv_codes @> '["45000000"]'` or `jsonb_array_elements_text(cpv_codes)`).
+"""
+
+SYSTEM_PROMPT = (
+    """You are the GTM Agent Orchestrator for a construction-tech B2B \
 lead-generation tool.
 
 Tenders (public procurement notices) and the supplier pool (companies that won past \
-TED awards) are ALREADY ingested into our local database. Your job is to resolve the \
-tender the user means, run the matching pipeline on it, and explain the result.
+TED awards) are ALREADY ingested into our local database. Your primary job is to \
+resolve the tender the user means, run the matching pipeline on it, and explain the \
+result. You can ALSO answer analytical questions about the ingested data via `query_db`.
 
-Plan:
+Plan (for the primary "match a tender" flow):
 1. RESOLVE the tender with `find_tender` (accepts a numeric id or words from the title).
    - Exactly one match: use it.
    - Several matches: call `ask_user` with the candidates and STOP for the user to pick.
@@ -45,12 +102,21 @@ Plan:
 4. EXPLAIN the top suppliers, grounding every reason ONLY in the scores/evidence the
    pipeline returned. Optionally `draft_email` to the top match.
 
+For OTHER questions (aggregations, rankings, history across the data) that the tools
+above do not answer, use `query_db` against the schema below. If a request cannot be
+answered with the available tools/data, say so plainly instead of guessing — do not
+invent suppliers, numbers, or columns.
+
 Rules:
 - The data is LOCAL — never assume you must fetch from TED. Prefer the read-only tools.
 - Do NOT call `ingest_tenders` / `ingest_awards` except as the explicit fallbacks above.
 - Use `ask_user` whenever you are unsure which tender or option the user wants.
+- Ground every factual claim in tool output — never fabricate scores, companies, or rows.
 - Be concise. Think step by step, then act with tool calls.
+
 """
+    + SCHEMA_REFERENCE
+)
 
 ANTHROPIC_TOOLS = [
     {
@@ -214,6 +280,24 @@ class AgentController:
     # ── the loop ─────────────────────────────────────────────────────────────
 
     def _drive(self, db: Any, sess: AgentSession) -> Iterator[dict[str, Any]]:
+        """Drive the loop; on any unexpected failure mark the session `error`.
+
+        The Anthropic call (and DB persistence) inside `_run_loop` can raise —
+        without this the session row would be left `running` forever: a dangling
+        state that `stream_continue` can't resume and that's indistinguishable
+        from an in-flight run. We flip the status to `error` and surface an
+        `error` event (the API layer's own guard is now a redundant backstop)."""
+        try:
+            yield from self._run_loop(db, sess)
+        except Exception as e:  # noqa: BLE001 — surface as an event, don't leak `running`
+            self._mark_error(db, sess)
+            yield {
+                "type": "error",
+                "session_id": str(sess.id),
+                "message": f"Agent execution failed: {e}",
+            }
+
+    def _run_loop(self, db: Any, sess: AgentSession) -> Iterator[dict[str, Any]]:
         messages: list[Any] = sess.messages if sess.messages is not None else []
         steps: list[Any] = sess.steps if sess.steps is not None else []
         run_state: dict[str, Any] = sess.run_state if sess.run_state is not None else {}
@@ -326,6 +410,23 @@ class AgentController:
         sess.messages = messages
         sess.steps = steps
         sess.run_state = run_state
+
+    @staticmethod
+    def _mark_error(db: Any, sess: AgentSession) -> None:
+        """Best-effort flip of a failed run to `error`.
+
+        Roll back any poisoned transaction first (the failure may have been a
+        DB error mid-commit), then persist just the status. Both steps are
+        guarded so this never itself raises out of the `_drive` except handler."""
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            sess.status = "error"
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
 
     @staticmethod
     def _persist(db: Any, sess: AgentSession) -> None:

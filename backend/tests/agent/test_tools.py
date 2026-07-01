@@ -54,6 +54,39 @@ def test_read_only_sql_rejects_writes_and_multi_statements(sql: str) -> None:
     assert _read_only_sql_error(sql) is not None
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Superuser-reachable primitives a plain SELECT could otherwise run
+        # (the app DB role is a Postgres superuser). P2.
+        "SELECT pg_read_file('/etc/passwd')",
+        "SELECT pg_read_binary_file('/etc/passwd')",
+        "SELECT pg_ls_dir('/')",
+        "SELECT lo_import('/etc/passwd')",
+        "SELECT pg_sleep(10)",
+        "SELECT rolname, rolpassword FROM pg_authid",
+        "SELECT * FROM pg_shadow",
+        "SELECT dblink('host=evil', 'SELECT 1')",
+        "SELECT set_config('x', 'y', false)",
+        "SELECT pg_terminate_backend(1)",
+        # Schema-qualified + case variants must still be caught.
+        "SELECT pg_catalog.pg_read_file('x')",
+        "select PG_SLEEP(1)",
+    ],
+)
+def test_read_only_sql_rejects_dangerous_functions(sql: str) -> None:
+    assert _read_only_sql_error(sql) is not None
+
+
+def test_query_db_dispatch_blocks_dangerous_function() -> None:
+    """The guard rejects a file-read SELECT before it ever touches the DB
+    (MagicMock session proves no execution happens)."""
+    out = dispatch_tool(
+        "query_db", {"sql_query": "SELECT pg_read_file('/etc/passwd')"}, MagicMock()
+    )
+    assert "disallowed" in out.lower()
+
+
 def test_query_db_runs_timestamp_columns_real_db(db_session) -> None:
     """End-to-end: SELECTs touching `created_at` (companies) and `updated_at`
     (tenders) must execute, not be rejected. These are the columns the old

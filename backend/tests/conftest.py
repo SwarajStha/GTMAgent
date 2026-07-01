@@ -79,6 +79,18 @@ def _offline_reflector(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reflector, "_llm_available", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Iterator[None]:
+    """Clear the in-process rate limiter before each test so per-IP counters
+    don't leak between tests (all TestClient requests share the 'testclient'
+    key). Keeps the rate-limit tests deterministic and stops unrelated endpoint
+    tests from tripping the shared budget."""
+    from app.core.rate_limit import get_limiter
+
+    get_limiter().reset()
+    yield
+
+
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     """Create + drop the schema on the test database once per session."""

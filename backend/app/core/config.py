@@ -78,6 +78,35 @@ class Settings(BaseSettings):
         description="How many months back to search for TED award notices during back-fill.",
     )
 
+    # ── Abuse controls (P1 — Unbounded Consumption / Denial-of-Wallet) ─────────
+    # The LLM-calling endpoints (agent run/continue/reflect, tender extract) are
+    # unauthenticated and each triggers paid Claude calls. These per-IP limits cap
+    # how many *runs* an caller can start per window — they never interrupt a run
+    # that is already executing (max_turns bounds a single run), so a legitimate
+    # multi-step run is never cut mid-work. Set RATE_LIMIT_ENABLED=false to disable.
+    rate_limit_enabled: bool = Field(
+        default=True,
+        description="Enforce per-IP rate limits on the LLM-calling endpoints.",
+    )
+    llm_rate_limit_per_minute: int = Field(
+        default=20,
+        description="Max LLM-calling requests per IP per minute (shared across agent/extract).",
+    )
+    llm_rate_limit_per_hour: int = Field(
+        default=200,
+        description="Max LLM-calling requests per IP per hour (sustained-drain guard).",
+    )
+
+    # ── query_db hardening (P2 — Improper Output Handling / SQLi) ──────────────
+    query_db_statement_timeout_ms: int = Field(
+        default=5000,
+        description=(
+            "Postgres statement_timeout (ms) applied to each agent `query_db` "
+            "call, so a slow/looping SELECT (e.g. pg_sleep, runaway join) can't "
+            "wedge the connection."
+        ),
+    )
+
     # ── Scheduler (Job 4 / G13) ───────────────────────────────────────────────
     # The in-process APScheduler loop is OPT-IN. Default False so CI, tests, and a
     # normal dev/API boot never start polling live TED. Enable in production by

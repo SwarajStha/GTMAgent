@@ -76,3 +76,45 @@ def test_post_agent_run_requires_api_key():
         response = client.post("/api/v1/agent/run", json={"goal": "Test goal"})
     assert response.status_code == 500
     assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+
+
+def test_post_agent_run_rejects_oversized_goal():
+    """P1: an over-long goal is rejected (422) before any Claude call — caps the
+    per-request token cost."""
+    with patch("app.api.v1.agent.get_settings") as mock_settings:
+        mock_settings.return_value.anthropic_api_key = "dummy_key"
+        response = client.post("/api/v1/agent/run", json={"goal": "x" * 9000})
+    assert response.status_code == 422
+
+
+@patch("app.api.v1.agent.AgentController")
+def test_post_agent_run_rate_limited(mock_agent_class, monkeypatch):
+    """P1: once the per-IP budget is spent, further runs get 429 + Retry-After —
+    but the requests that were admitted still complete (never cut mid-run)."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "llm_rate_limit_per_minute", 2)
+    monkeypatch.setattr(settings, "llm_rate_limit_per_hour", 100)
+
+    def _final_event():
+        return iter(
+            [{
+                "type": "final", "session_id": "s", "goal": "g",
+                "steps": [], "output": "ok", "truncated": False,
+            }]
+        )
+
+    mock_agent_class.return_value.stream_run.side_effect = lambda *_a, **_k: _final_event()
+
+    with patch("app.api.v1.agent.get_settings") as mock_settings:
+        mock_settings.return_value.anthropic_api_key = "dummy_key"
+        r1 = client.post("/api/v1/agent/run", json={"goal": "g"})
+        r2 = client.post("/api/v1/agent/run", json={"goal": "g"})
+        r3 = client.post("/api/v1/agent/run", json={"goal": "g"})
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r3.status_code == 429
+    assert r3.headers.get("Retry-After")

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.core.rate_limit import llm_rate_limit
 from app.db.models import CompanyProfile, Match, Tender, TenderReport
 
 router = APIRouter()
@@ -141,7 +142,7 @@ def _resolve_tender(db: Session, tender_id: str) -> Tender:
     return tender
 
 
-@router.post("/{tender_id}/extract")
+@router.post("/{tender_id}/extract", dependencies=[Depends(llm_rate_limit)])
 def extract_tender_profile(
     tender_id: str, db: Annotated[Session, Depends(get_db)]
 ) -> TenderProfileOut:

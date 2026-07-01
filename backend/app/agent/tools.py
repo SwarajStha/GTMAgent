@@ -201,7 +201,32 @@ AGENT_TOOLS = [
 # tables (e.g. `SELECT created_at FROM tenders` tripped the `"create"` token).
 # See docs/integration_gap_tracker.md (R6).
 _FORBIDDEN_SQL_KEYWORDS = re.compile(
-    r"\b(insert|update|delete|drop|alter|truncate|create)\b",
+    r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\b",
+    re.IGNORECASE,
+)
+
+# Superuser-reachable primitives that a *read-only* SELECT can still invoke
+# (the app DB role is a Postgres superuser). Without this a single valid SELECT
+# could read arbitrary files (`pg_read_file('/etc/passwd')`), dump password
+# hashes (`pg_authid`/`pg_shadow`), reach other databases (`dblink`), stall the
+# connection (`pg_sleep`), or kill backends — none of which the agent needs.
+# Whole-word + case-insensitive, so `pg_catalog.pg_read_file` and quoted/upper
+# variants are still caught. This is defence-in-depth at the app layer; the
+# durable structural fix is running query_db under a least-privilege read-only
+# role (see backend/scripts/README.md / the P2 plan). `pg_sleep` DoS is *also*
+# bounded by the statement_timeout applied at execution.
+_DANGEROUS_SQL_TOKENS = re.compile(
+    r"\b("
+    r"pg_read_file|pg_read_binary_file|pg_stat_file|"
+    r"pg_ls_dir|pg_ls_logdir|pg_ls_waldir|pg_ls_tmpdir|pg_ls_archive_statusdir|"
+    r"lo_import|lo_export|lo_get|lo_put|"
+    r"pg_sleep|pg_sleep_for|pg_sleep_until|"
+    r"pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|"
+    r"set_config|"
+    r"dblink|dblink_exec|"
+    r"pg_authid|pg_shadow|pg_hba_file_rules|"
+    r"pg_read_server_files|pg_write_server_files|pg_execute_server_program"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -228,6 +253,12 @@ def _read_only_sql_error(sql: str) -> str | None:
     match = _FORBIDDEN_SQL_KEYWORDS.search(stripped)
     if match:
         return f"keyword '{match.group(0).lower()}' is not allowed in a read-only query"
+    dangerous = _DANGEROUS_SQL_TOKENS.search(stripped)
+    if dangerous:
+        return (
+            f"'{dangerous.group(0).lower()}' is a disallowed function/table "
+            "(file access, credentials, cross-database, or sleep) in a read-only query"
+        )
     return None
 
 
@@ -374,13 +405,22 @@ def dispatch_tool(
         if reason is not None:
             return f"Error executing query: {reason}."
         try:
+            from app.core.config import get_settings
+
             # Run inside a SAVEPOINT: the agent shares ONE session for both tool
             # execution and its own state persistence, so a bad query (e.g. the
             # model guessing a wrong column/table) would otherwise poison the whole
             # run transaction ("current transaction is aborted"). The savepoint
             # rolls back only the failed statement, leaving the run recoverable.
             # Cap results so a large table can't bloat the output fed to the model.
+            timeout_ms = int(get_settings().query_db_statement_timeout_ms)
             with session.begin_nested():
+                # Bound this query's runtime so a slow/looping SELECT (e.g. a
+                # runaway join, or a pg_sleep that slipped the guard) can't wedge
+                # the connection. SET LOCAL is scoped to the surrounding txn and
+                # rolls back with the savepoint. The value is a sanitized int, so
+                # it is safe to inline (SET does not accept a bound parameter).
+                session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
                 rows = session.execute(text(sql.strip().rstrip(";"))).mappings().fetchmany(50)
             return str([dict(row) for row in rows])
         except Exception as e:  # noqa: BLE001

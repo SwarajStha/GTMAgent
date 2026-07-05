@@ -506,11 +506,14 @@ fresh-checkout `ImportError`. Add to `requirements-ml.txt`. **One-line fix.**
 10-float LR from `model_report.json` coefficients in-app over committing a
 version-coupled joblib (decide as part of G1). **Refs:** v5 review #3.
 
-#### G19 🟢 Large generated artifacts in git
+#### G19 🟢 Large generated artifacts in git — DEFERRED (cleanup for later, 2026-07-05)
 `exports/top3_results.json` (20k lines), `exports/gtm_awards_export.zip` (8.3 MB),
-`exports/awards_training.csv` (21k rows) — no `.gitignore` rule. Keep a frozen
-training snapshot for the report; gitignore regenerated outputs. **Refs:** PR #10
-review #10, v5 review #9, `gtm_lead_scoring` gap A.
+`exports/awards_training.csv` (21k rows) — no `.gitignore` rule. **Decision
+(2026-07-05):** keep the artifacts in git **for now** — they double as the frozen
+training snapshot the report/model depend on, and pulling them mid-course risks a
+missing-file surprise before the demo. Revisit as a post-course hygiene pass:
+gitignore the regenerated outputs, keep one frozen snapshot. Not blocking. **Refs:**
+PR #10 review #10, v5 review #9, `gtm_lead_scoring` gap A.
 
 #### G20 🟡 Feature logic in two places (accepted train/serve split after Step 4)
 Step 4 settled v5↔app as **v5 = offline trainer, app = server**: the 10-feature
@@ -547,14 +550,25 @@ poisoned the shared transaction) was fixed with a `begin_nested` SAVEPOINT + hav
 progress}.py`, `app/api/v1/agent.py`, `app/db/models.py` + migration `0014`,
 `frontend/src/stores/agent.ts` + `views/AgentView.vue`. **Refs:** agent review #4.
 #### G23 🟢 v5 model trained on 50% of data — retrain on more once ported (v5 #6, #8).
-#### G24 🟢 PDF portal scraping deferred (per `docs/Notes.md`) — adapter registry + Firecrawl/Claude fallback if/when needed.
-#### G25 🟢 `backend/easy_demo/` is doubly superseded — decide its fate
+#### G24 🟢 PDF portal scraping — WON'T IMPLEMENT (future work, 2026-07-05)
+Deferred per `docs/Notes.md`; the concept was a per-portal adapter registry +
+Firecrawl/Claude fallback. **Decision (2026-07-05):** explicitly **not on the
+roadmap** — most buyer portals return HTML not PDF (thin coverage), every portal
+needs bespoke handling, and it is not part of the agent's toolset. Left as an
+open-ended future-work idea only. The `dossier_downloader` ingestion utility stays
+as-is (best-effort direct-PDF fetch).
+#### G25 ✅ `backend/easy_demo/` removed — DONE (2026-07-05)
 The seller-perspective lead-scoring spike was first ported into `app/matching/`,
-then superseded as the ML model by v5. Its own gaps (tests not in CI, non-package
-layout, `joblib` undeclared in its `requirements.txt`, vendor-hardcoded
-constants, all-synthetic data, committed `.joblib`/`scores_output.json`
-artifacts) are not worth fixing if it's dead. **Decide:** archive/remove it, or
-keep it as a documented standalone demo. **Refs:** gtm_lead_scoring gaps B/D/E/F/G.
+then superseded as the ML model by v5. **Decision (2026-07-05):** removed from the
+codebase (`git rm -r backend/easy_demo/`, 19 files). Verified dead before deletion:
+no `app/`, `tests/`, `frontend/`, `pyproject.toml`, `alembic.ini`, or CI reference
+imported or ran it; the main suite is scoped to `backend/tests/` (`testpaths`), so
+its own `easy_demo/tests/` was never collected; and the app matcher loads
+`exports/model_params.json` (repo-root `exports/`), entirely separate from the
+now-deleted `easy_demo/models/`. Current-state doc references updated (README repo
+tree, Guide.md, `docs/architecture.md`); dated history logs (Notes.md, CLAUDE.md
+session log) left intact as accurate point-in-time records. **Refs:**
+gtm_lead_scoring gaps B/D/E/F/G.
 
 ---
 

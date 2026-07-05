@@ -159,6 +159,23 @@ Legend: 🔴 blocker · 🟠 important · 🟡 quality · 🟢 nice-to-have · �
   email for the *non-top* (🥉) pick produced a real grounded Claude email; emails list
   returns 4 real drafts; reports list shows the saved snapshot. **Manual step:**
   `alembic upgrade head` (0015, applied).
+- **2026-07-05 — Backlog cleanup + G20/G27/G23.** Housekeeping: **G19** deferred
+  (keep artifacts for now), **G24** marked won't-implement, **G25** dead
+  `backend/easy_demo/` removed (19 files; no app/test/CI refs). **G20** (train/serve
+  drift): audited in-sync, added a **CI-safe contract test** (`features.FEATURE_NAMES`
+  ↔ committed `model_params.json`) + a **local parity test** (app ↔ v5 trainer, output
+  for output, `importorskip`-guarded) + cross-ref comments; 3 divergences documented as
+  intended (multi-CPV any-match, `competition_score`=UNKNOWN, `_norm_cpv` no-digit).
+  **G27** (ops palette): an **Ops console** on the Agent screen — `/retrain` `/reflect`
+  `/schedule on|off|status` `/help` mapping to existing endpoints + a **new runtime
+  `POST /api/v1/agent/scheduler`** (force-start/status/stop) with `IngestionScheduler.
+  start(force=True)` + `.status()`; live-smoked against uvicorn. **G23** (more training
+  data): `TRAIN_SAMPLE` 0.50→0.80 (leakage-safe split), retrained 10,507→16,812 awards,
+  Hit@3 flat ~54% on a harder later-20% held-out set; the G20 contract test
+  auto-validated the regenerated model; live matcher smoke ranked Irish construction
+  firms for an Irish siteworks tender. **346 backend tests** (+G20 34, +G27 9),
+  ruff-clean, frontend lint+build clean. **No migration.** **Resolved:** G19 (deferred),
+  G20, G23, G24 (deferred), G25, G27 (R34–R37).
 
 ---
 
@@ -213,6 +230,10 @@ Everything else is downstream of that.
 | R31 | Fabricated email recipient + stale ready-threshold (G17b) | 2026-06-23 | supplier contact derived from website + flagged unverified (no fake `sales@`); ready cut-off 0.8→0.6; weighted-mode hard-filter bug fixed |
 | R32 | Agent loop unsafe: dry-run hit live TED/portals, hung, drained credits, no live test (G22) | 2026-06-30 | DB-first (`find_tender`→`find_matches`); `download_dossiers` removed, `ingest_*` caged (no network in dry-run; bounded + ≤1×; awards gated on zero-match); streaming SSE + resumable `ask_user` via `agent_sessions` (mig `0014`); query_db SAVEPOINT fix; +15 offline guardrail tests; live-smoked |
 | R33 | No way to act on / save the agent's result; UI exposed internal ids (G28) | 2026-07-01 | `find_tender` + Tender-detail panel use public `ted_notice_id`; Save-results → `tender_reports` (mig `0015`, narrative + snapshot, history); Draft-email 🥇/🥈/🥉 selector → existing per-match endpoint; honest dry-run label; +4 tests; live-smoked |
+| R34 | Dead `backend/easy_demo/` spike doubly superseded (G25) | 2026-07-05 | removed (`git rm -r`, 19 files); verified no app/test/CI/config import; current-state docs updated |
+| R35 | Train/serve feature drift unguarded (G20) | 2026-07-05 | audited in-sync; CI-safe contract test (code ↔ `model_params.json`) + local parity test (app ↔ v5 trainer) + cross-ref comments; +34 tests |
+| R36 | No in-UI ops actions (G27) | 2026-07-05 | Ops console (`/retrain` `/reflect` `/schedule` `/help`) → existing endpoints + new runtime `POST /agent/scheduler` (force-start/status/stop); +9 tests; live-smoked |
+| R37 | Shipped model trained on only 50% of awards (G23) | 2026-07-05 | `TRAIN_SAMPLE` 0.50→0.80 (leakage-safe split); retrained 10,507→16,812 awards; Hit@3 flat ~54% on a harder later-20% held-out set; G20 contract auto-validated; live-smoked |
 
 ---
 
@@ -443,28 +464,34 @@ backend-API #8.
 > emails) remain out of scope: TED award data carries none, same data limitation as
 > G14. G17b makes the *absence* honest rather than inventing an address.
 
-#### G27 🟢 In-UI command palette for ops actions ("/schedule", "/retrain") — future work
-Idea (user, 2026-06-22): a text field in the UI where typing slash-commands runs
-operator actions without touching code/env — e.g. `/retrain` (retrain the LR from
-feedback), `/reflect` (run a reflection cycle), `/schedule on|off` (toggle the
-in-process scheduler at runtime). Gives the product a more agentic feel.
-- **Feasibility: HIGH; mostly already wired.** `/retrain` → existing
-  `POST /api/v1/feedback/retrain`; `/reflect` → existing `POST /api/v1/agent/reflect`
-  (both shipped). The only **new backend** piece is a runtime scheduler toggle:
-  `IngestionScheduler.start()` currently gates on `settings.scheduler_enabled` (an
-  env var read once at boot), so add e.g. `POST /api/v1/agent/scheduler {action:
-  start|stop}` operating on the process-level `app.state.scheduler`, with a
-  `start_now()`/`force=True` that bypasses the env gate. Frontend is a small Vue
-  command field + Pinia actions mapping commands → endpoints.
-- **Caveats to design in:** (a) the scheduler is **in-process per worker** — a
-  runtime toggle only affects the worker that served the request (fine for
-  single-worker dev; for multi-worker prod use the env flag or an external
-  scheduler/lock); (b) a runtime toggle is **not persistent** across restarts
-  (env `SCHEDULER_ENABLED` still governs boot); (c) these commands trigger
-  **live writes / live TED polls** (esp. `/schedule on` → daily contract poll) so
-  gate them (confirm step / auth once G21 lands) and surface the
-  `dry_run`/`act` flags. **Refs:** builds on G13 (scheduler) + G8 (retrain) + G9
-  (reflect); pairs with G15 (frontend shell).
+#### G27 ✅ In-UI command palette for ops actions — DONE (2026-07-05)
+An "Ops console" card on the Agent screen: a slash-command field mapping operator
+actions to existing endpoints, so common ops don't need code/env edits.
+- **`/retrain [n]`** → existing `POST /api/v1/feedback/retrain?min_samples=n`
+  (default 10); the console summarizes retrained vs insufficient + the 👍/👎 counts.
+- **`/reflect [observe]`** → existing `POST /api/v1/agent/reflect?act=…` (bare = act;
+  `observe` = observe-only); populates the reflection result panel.
+- **`/schedule on|off|status`** → **new** `POST /api/v1/agent/scheduler
+  {action: start|stop|status}` operating on the process-level `app.state.scheduler`.
+  New `IngestionScheduler.start(force=True)` bypasses the `SCHEDULER_ENABLED` env gate
+  (the runtime toggle) + a new `IngestionScheduler.status()` (running + jobs +
+  next-run times). `start` reports the staggered next-runs; `stop`/`status` are safe
+  when not running.
+- **`/help`** lists the commands (client-side, no request).
+- **Caveats surfaced honestly (unchanged from the design):** the scheduler is
+  **in-process per worker** (toggle affects only the serving worker) and the toggle
+  is **not persistent** across restarts (env `SCHEDULER_ENABLED` still governs boot);
+  `/schedule on` starts the daily live TED poll cron (the UI flags this in amber).
+  Jobs are cron (daily/weekly) so starting does **not** immediately hit the network.
+  Auth-gating deferred to G21 (no auth in V1).
+- **Files:** `app/ingestion/scheduler.py` (`force` + `status`), `app/api/v1/agent.py`
+  (`POST /scheduler`), `frontend/src/stores/agent.ts` (`runCommand` + `commandLog`),
+  `frontend/src/views/AgentView.vue` (Ops console card). **Tests:** +9 (scheduler
+  force/status contract + endpoint start/status/stop/reject), 346 backend tests,
+  ruff-clean, frontend lint+build clean. **Live-smoked** against a running uvicorn:
+  status→start→status→stop→invalid returned the expected states + 4 staggered job
+  next-runs; `force` correctly overrode the disabled env gate. No migration.
+  **Refs:** builds on G13 (scheduler) + G8 (retrain) + G9 (reflect); pairs with G15.
 
 #### G28 ✅ Act on / save the agent's result — DONE (2026-07-01)
 The agent ended its run with a yes/no offer ("draft an email to the top match?") the
@@ -515,14 +542,32 @@ missing-file surprise before the demo. Revisit as a post-course hygiene pass:
 gitignore the regenerated outputs, keep one frozen snapshot. Not blocking. **Refs:**
 PR #10 review #10, v5 review #9, `gtm_lead_scoring` gap A.
 
-#### G20 🟡 Feature logic in two places (accepted train/serve split after Step 4)
+#### G20 ✅ Feature logic in two places — DRIFT-GUARDED (2026-07-05)
 Step 4 settled v5↔app as **v5 = offline trainer, app = server**: the 10-feature
-math now exists in both `exports_ml_pipeline.py` (training) and
-`app/matching/features.py` (serving), intentionally separate but **must stay in
-sync** — change v5's features → port to `features.py` → regenerate
-`model_params.json`. Name normalisation / profile building / FX table are still
-duplicated too. Lower priority now the serving path is unified; revisit if the
-two feature implementations drift. **Refs:** v5 review #7.
+math exists in both `exports_ml_pipeline.py` (training) and
+`app/matching/features.py` (serving), intentionally separate (the trainer scores one
+CPV per row + sees the real offer count; the server scores multi-CPV live tenders +
+can't know a future tender's competition) so they **can't be one function** — but the
+shared per-feature math must stay identical. **Audited 2026-07-05: currently in
+sync** — `FEATURE_NAMES` (10, identical order), `RATES_TO_EUR` (byte-identical), and
+`_norm_cpv`/`cpv`/`nuts`/`value`/`country`/`size` math all match. The fix is
+**drift-detection, not merger**:
+- `tests/matching/test_feature_contract.py` (**CI-safe**, no ML deps) — asserts
+  `features.FEATURE_NAMES` == the committed `exports/model_params.json["feature_names"]`
+  element-for-element, param-array lengths align, and a real `compute_features` dict
+  round-trips through the actual `LogisticRegressionScorer` with no missing/extra key.
+  Catches the dangerous silent case (a feature added/removed/reordered on one side).
+- `tests/matching/test_feature_parity_v5.py` (**local-only**, `importorskip` on numpy /
+  the trainer — same pattern as the sklearn test, skips in CI) — imports both
+  implementations and asserts identical output across an input table, and asserts the
+  3 **intended** divergences (multi-CPV any-match, `competition_score`=UNKNOWN at
+  serve, `_norm_cpv` no-digit handling) so they read as deliberate, not drift.
+- Cross-reference comments added to both `features.py` and `exports_ml_pipeline.py`
+  enumerating the sync contract + intended differences.
+
+Name normalisation / profile building are still duplicated but are upstream of the
+served vector; lower priority. 34 new tests (5 contract + 29 parity), ruff-clean.
+**Refs:** v5 review #7.
 
 ### Priority 8 — Later / out of V1 scope
 
@@ -549,7 +594,27 @@ poisoned the shared transaction) was fixed with a `begin_nested` SAVEPOINT + hav
 `find_matches` return structured scores. **Files:** `app/agent/{tools,controller,
 progress}.py`, `app/api/v1/agent.py`, `app/db/models.py` + migration `0014`,
 `frontend/src/stores/agent.ts` + `views/AgentView.vue`. **Refs:** agent review #4.
-#### G23 🟢 v5 model trained on 50% of data — retrain on more once ported (v5 #6, #8).
+#### G23 ✅ v5 model retrained on more data — DONE (2026-07-05)
+The "50%" was **not** a resource cap — `TRAIN_SAMPLE=0.50` is a leakage-safe
+*chronological* split (train on the earliest 50% of awards, hold out the later 50%
+to measure honest Hit@k on unseen tenders). Raised **0.50 → 0.80** so the shipped
+model trains on ~60% more (and more recent) award pairs while still holding out ~20%
+(~4k awards) for the eval. Regenerated `exports/model_params.json` + `model_report.json`
++ joblib via `run_pipeline.py` (offline HF cache).
+- **Train awards:** 10,507 → **16,812**. **Honest eval (500 held-out tenders):**
+  Hit@1 45.2→**44.2%**, Hit@3 54.8→**54.0%**, Hit@5 59.0→**57.6%**. The ~1pp dips are
+  **noise from a different, harder held-out set**, not a regression — at 0.80 the
+  eval set is the *later 20%* (most recent tenders), not the later 50%. Net: accuracy
+  is flat (~54% Hit@3 holds across split ratios) while the served model now leans on
+  more + more-recent signal (better aligned to the current/future tenders it scores).
+- **Model is stable:** feature order unchanged; coefficient signs + dominant signals
+  unchanged (cpv_4digit +1.29, nuts_exact +1.25, semantic +1.13). `competition_score`
+  coef is 0.000 in both runs — confirming it's inert at serve time (the G20 note).
+- **Verified:** the **G20 contract test auto-validated the regeneration** (feature_names
+  match, scorer round-trips); 115 matching tests green; live matcher smoke — an Irish
+  siteworks tender ranked Irish construction/civil-engineering firms (GEM Construction,
+  Glas Civil Engineering, …), scores 0.58–0.64. No migration; no feature/schema change.
+  **Refs:** v5 #6, #8.
 #### G24 🟢 PDF portal scraping — WON'T IMPLEMENT (future work, 2026-07-05)
 Deferred per `docs/Notes.md`; the concept was a per-portal adapter registry +
 Firecrawl/Claude fallback. **Decision (2026-07-05):** explicitly **not on the

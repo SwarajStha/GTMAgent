@@ -1,7 +1,7 @@
 import json
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -132,3 +132,59 @@ def run_reflection(act: bool = True):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reflection failed: {str(e)}")
     return ReflectResponse(**result)
+
+
+class SchedulerCommand(BaseModel):
+    action: Literal["start", "stop", "status"] = Field(
+        ..., description="start / stop the in-process scheduler, or report its status."
+    )
+
+
+class SchedulerStatusOut(BaseModel):
+    running: bool
+    jobs: list[dict[str, Any]]
+    message: str
+
+
+@router.post("/scheduler", response_model=SchedulerStatusOut)
+def control_scheduler(command: SchedulerCommand, request: Request) -> SchedulerStatusOut:
+    """Toggle the in-process ingestion/reflection scheduler at runtime (G27).
+
+    Powers the `/schedule on|off|status` ops command. `start` bypasses the
+    `SCHEDULER_ENABLED` env gate (`force=True`) so an operator can start the loop
+    without a restart. Caveats: the scheduler is **in-process per worker** — this
+    only affects the worker that served the request — and the toggle is **not
+    persistent** across restarts (the env flag still governs boot). Jobs are cron
+    (daily/weekly), so starting does not immediately hit the network.
+    """
+    from app.ingestion.scheduler import IngestionScheduler
+
+    scheduler: IngestionScheduler | None = getattr(request.app.state, "scheduler", None)
+    running = scheduler is not None and scheduler.scheduler.running
+
+    if command.action == "start":
+        if running:
+            return SchedulerStatusOut(**scheduler.status(), message="Scheduler already running.")
+        scheduler = IngestionScheduler()
+        started = scheduler.start(force=True)
+        request.app.state.scheduler = scheduler if started else None
+        return SchedulerStatusOut(
+            **scheduler.status(),
+            message="Scheduler started." if started else "Scheduler could not start.",
+        )
+
+    if command.action == "stop":
+        if not running:
+            return SchedulerStatusOut(running=False, jobs=[], message="Scheduler was not running.")
+        scheduler.shutdown()
+        request.app.state.scheduler = None
+        return SchedulerStatusOut(running=False, jobs=[], message="Scheduler stopped.")
+
+    # status
+    if scheduler is None:
+        return SchedulerStatusOut(running=False, jobs=[], message="Scheduler is not running.")
+    status = scheduler.status()
+    return SchedulerStatusOut(
+        **status,
+        message="Scheduler is running." if status["running"] else "Scheduler is not running.",
+    )

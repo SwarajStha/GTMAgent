@@ -118,3 +118,49 @@ def test_post_agent_run_rate_limited(mock_agent_class, monkeypatch):
     assert r2.status_code == 200
     assert r3.status_code == 429
     assert r3.headers.get("Retry-After")
+
+
+# ── scheduler runtime toggle (G27) ──────────────────────────────────────────
+
+
+def test_scheduler_status_when_not_running():
+    app.state.scheduler = None
+    response = client.post("/api/v1/agent/scheduler", json={"action": "status"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["running"] is False
+    assert body["jobs"] == []
+
+
+def test_scheduler_start_status_stop_lifecycle():
+    app.state.scheduler = None
+    try:
+        started = client.post("/api/v1/agent/scheduler", json={"action": "start"})
+        assert started.status_code == 200
+        sb = started.json()
+        assert sb["running"] is True
+        assert len(sb["jobs"]) >= 1
+        assert "started" in sb["message"].lower()
+
+        status = client.post("/api/v1/agent/scheduler", json={"action": "status"})
+        assert status.json()["running"] is True
+
+        # starting again is idempotent, not an error.
+        again = client.post("/api/v1/agent/scheduler", json={"action": "start"})
+        assert "already running" in again.json()["message"].lower()
+    finally:
+        stopped = client.post("/api/v1/agent/scheduler", json={"action": "stop"})
+        assert stopped.json()["running"] is False
+        app.state.scheduler = None
+
+
+def test_scheduler_stop_when_not_running_is_safe():
+    app.state.scheduler = None
+    response = client.post("/api/v1/agent/scheduler", json={"action": "stop"})
+    assert response.status_code == 200
+    assert response.json()["running"] is False
+
+
+def test_scheduler_rejects_unknown_action():
+    response = client.post("/api/v1/agent/scheduler", json={"action": "restart"})
+    assert response.status_code == 422

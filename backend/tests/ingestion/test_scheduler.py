@@ -37,6 +37,27 @@ def test_disabled_start_is_noop() -> None:
     assert s.scheduler.get_jobs() == []
 
 
+def test_force_start_bypasses_env_gate() -> None:
+    # G27: the runtime toggle can start the loop even when SCHEDULER_ENABLED is off.
+    s = IngestionScheduler(settings=_settings(scheduler_enabled=False))
+    try:
+        assert s.start(force=True) is True
+        assert s.scheduler.running is True
+        status = s.status()
+        assert status["running"] is True
+        assert len(status["jobs"]) >= 1
+    finally:
+        s.shutdown()
+    assert s.scheduler.running is False
+
+
+def test_status_reports_not_running_before_start() -> None:
+    s = IngestionScheduler(settings=_settings())
+    status = s.status()
+    assert status["running"] is False
+    assert status["jobs"] == []
+
+
 def test_register_jobs_adds_all_four() -> None:
     s = IngestionScheduler(settings=_settings())
     s.register_jobs()

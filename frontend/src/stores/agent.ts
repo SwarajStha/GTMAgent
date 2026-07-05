@@ -36,6 +36,20 @@ export interface TopMatch {
   finalScore: number
 }
 
+// One line in the ops command console (G27).
+export interface CommandLogEntry {
+  command: string
+  result: string
+  ok: boolean
+}
+
+const COMMAND_HELP = [
+  '/retrain [n]        retrain the matching model from feedback (min n samples, default 10)',
+  '/reflect [observe]  run a reflection cycle (add "observe" to skip the retrain)',
+  '/schedule on|off|status   toggle the in-process ingestion scheduler',
+  '/help               show this list',
+].join('\n')
+
 export const useAgentStore = defineStore('agent', {
   state: () => ({
     run: null as AgentRunResult | null,
@@ -60,6 +74,9 @@ export const useAgentStore = defineStore('agent', {
     emailDraftingId: null as string | null,
     emailDraftedFor: null as { company: string; emailId: string } | null,
     actionError: null as string | null,
+    // ── ops command console (G27) ────────────────────────────────────────────
+    commandLog: [] as CommandLogEntry[],
+    commandRunning: false,
   }),
   actions: {
     async runAgent(goal: string, dryRun = true) {
@@ -280,6 +297,90 @@ export const useAgentStore = defineStore('agent', {
         throw error
       } finally {
         this.reflectLoading = false
+      }
+    },
+    // Parse and run a slash-command from the ops console (G27). Maps each command
+    // to an existing endpoint and appends a one-line result to `commandLog`.
+    async runCommand(raw: string) {
+      const text = raw.trim()
+      if (!text) return
+      const [cmd, ...args] = text.split(/\s+/)
+      const push = (result: string, ok: boolean) =>
+        this.commandLog.unshift({ command: text, result, ok })
+
+      if (cmd === '/help') {
+        push(COMMAND_HELP, true)
+        return
+      }
+
+      this.commandRunning = true
+      try {
+        if (cmd === '/retrain') {
+          const n = Number.parseInt(args[0] ?? '', 10)
+          const minSamples = Number.isFinite(n) && n >= 2 ? n : 10
+          const body = await this._postJson(
+            `/api/v1/feedback/retrain?min_samples=${minSamples}`,
+          )
+          if (body.status === 'retrained') {
+            push(
+              `Model retrained on ${body.n_samples} feedback samples ` +
+                `(${body.n_pos}👍 / ${body.n_neg}👎). Now serving the feedback-tuned weights.`,
+              true,
+            )
+          } else {
+            push(
+              `Not enough feedback yet: ${body.n_samples}/${body.min_required} samples ` +
+                `(${body.n_pos}👍 / ${body.n_neg}👎). Base model still serving.`,
+              true,
+            )
+          }
+        } else if (cmd === '/reflect') {
+          const act = !(args[0] === 'observe' || args[0] === '--observe' || args[0] === '--no-act')
+          const body = await this._postJson(`/api/v1/agent/reflect?act=${act}`)
+          this.reflection = body as unknown as ReflectionResult
+          push(
+            `Reflection cycle complete${act ? ' (retrain actuated)' : ' (observe only)'}. ` +
+              `See the reflection result below.`,
+            true,
+          )
+        } else if (cmd === '/schedule') {
+          const sub = (args[0] ?? 'status').toLowerCase()
+          const action = sub === 'on' ? 'start' : sub === 'off' ? 'stop' : 'status'
+          if (!['on', 'off', 'status'].includes(sub)) {
+            push(`Usage: /schedule on|off|status`, false)
+            return
+          }
+          const body = await this._postJson('/api/v1/agent/scheduler', { action })
+          const jobs = Array.isArray(body.jobs) ? body.jobs.length : 0
+          push(`${body.message} (${body.running ? `${jobs} jobs scheduled` : 'stopped'})`, true)
+        } else {
+          push(`Unknown command "${cmd}". Type /help for the list.`, false)
+        }
+      } catch (error) {
+        push(error instanceof Error ? error.message : 'Command failed', false)
+      } finally {
+        this.commandRunning = false
+      }
+    },
+    async _postJson(url: string, body?: Record<string, unknown>) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(data?.detail ?? `Request failed (${response.status})`)
+      }
+      return data as Record<string, unknown> & {
+        status?: string
+        n_samples?: number
+        n_pos?: number
+        n_neg?: number
+        min_required?: number
+        message?: string
+        running?: boolean
+        jobs?: unknown[]
       }
     },
   },

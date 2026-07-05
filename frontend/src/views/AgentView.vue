@@ -7,6 +7,14 @@ const goal = ref('Find the top 3 suppliers for tender 16 and explain why.')
 const dryRun = ref(true)
 const act = ref(true)
 const replyText = ref('')
+const command = ref('')
+
+async function submitCommand() {
+  const text = command.value.trim()
+  if (!text) return
+  command.value = ''
+  await agentStore.runCommand(text)
+}
 
 function pretty(value: unknown) {
   return JSON.stringify(value, null, 2)
@@ -96,6 +104,48 @@ async function reflect() {
         <p v-if="agentStore.reflectError" class="mt-3 text-xs font-bold text-amber-600">
           {{ agentStore.reflectError }} — showing sample output.
         </p>
+      </div>
+
+      <!-- Ops command console (G27): run operator actions without touching env/code. -->
+      <div class="surface p-4">
+        <p class="section-kicker">Ops console</p>
+        <h3 class="mt-1 text-sm font-black text-slate-950">Command palette</h3>
+        <p class="mt-2 text-xs font-semibold leading-5 text-slate-500">
+          Slash-commands for operator actions.
+          <code>/retrain</code>, <code>/reflect</code>, <code>/schedule on|off|status</code>,
+          <code>/help</code>.
+        </p>
+        <div class="mt-3 flex gap-2">
+          <input
+            v-model="command"
+            class="field w-full py-2 font-mono"
+            placeholder="/help"
+            :disabled="agentStore.commandRunning"
+            @keyup.enter="submitCommand"
+          >
+          <button
+            class="btn-secondary shrink-0"
+            type="button"
+            :disabled="agentStore.commandRunning || !command.trim()"
+            @click="submitCommand"
+          >
+            {{ agentStore.commandRunning ? '…' : 'Run' }}
+          </button>
+        </div>
+        <p class="mt-2 text-xs font-semibold leading-5 text-amber-600">
+          <code>/schedule on</code> starts live TED polling (per worker, not persistent).
+        </p>
+        <ul v-if="agentStore.commandLog.length" class="mt-3 space-y-2">
+          <li
+            v-for="(entry, index) in agentStore.commandLog"
+            :key="index"
+            class="rounded border p-2.5 text-xs"
+            :class="entry.ok ? 'border-slate-200 bg-slate-50' : 'border-amber-200 bg-amber-50'"
+          >
+            <p class="font-mono font-bold text-slate-700">{{ entry.command }}</p>
+            <pre class="mt-1 whitespace-pre-wrap font-semibold" :class="entry.ok ? 'text-slate-600' : 'text-amber-700'">{{ entry.result }}</pre>
+          </li>
+        </ul>
       </div>
     </section>
 

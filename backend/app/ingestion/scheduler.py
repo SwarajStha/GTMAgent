@@ -140,13 +140,17 @@ class IngestionScheduler:
                 misfire_grace_time=3600,
             )
 
-    def start(self) -> bool:
+    def start(self, force: bool = False) -> bool:
         """Register jobs and start the loop. Returns False (no-op) if disabled.
 
         Safe to call when ``scheduler_enabled`` is False (logs + returns False)
         or when already running (returns False) — so app boot never crashes on it.
+
+        ``force=True`` bypasses the ``scheduler_enabled`` env gate — used by the
+        runtime toggle endpoint (G27) so an operator can start the loop at runtime
+        without a restart. The env flag still governs *boot* behaviour.
         """
-        if not self.settings.scheduler_enabled:
+        if not force and not self.settings.scheduler_enabled:
             logger.info("scheduler: disabled (SCHEDULER_ENABLED is false) — not starting")
             return False
         if self.scheduler.running:
@@ -159,6 +163,18 @@ class IngestionScheduler:
             [job.id for job in self.scheduler.get_jobs()],
         )
         return True
+
+    def status(self) -> dict:
+        """Snapshot of the loop for the runtime toggle: running + jobs + next runs."""
+        running = self.scheduler.running
+        jobs = [
+            {
+                "id": job.id,
+                "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            }
+            for job in self.scheduler.get_jobs()
+        ]
+        return {"running": running, "jobs": jobs}
 
     def shutdown(self, wait: bool = False) -> None:
         """Gracefully stop the loop if it is running."""

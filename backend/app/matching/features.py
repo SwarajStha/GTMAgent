@@ -14,6 +14,18 @@ Live-tender caveat: real contract-notice tenders often lack a NUTS code and a
 budget, so `nuts_*` and `value_*` fall back to the 0.5 "unknown" fill exactly as
 v5 does when a field is missing — the model then leans on its strongest learned
 signals (CPV-4, semantic, country).
+
+Train/serve sync (G20). This file and the trainer's feature math
+(`exports_ml_pipeline.py`) are separate implementations that MUST agree — change a
+feature here, port it to the trainer, and regenerate `model_params.json` (or vice
+versa). Two guards enforce it: `tests/matching/test_feature_contract.py` (CI-safe:
+code ↔ committed artifact) and `tests/matching/test_feature_parity_v5.py` (local:
+this module ↔ the trainer, output-for-output). Three differences are DELIBERATE and
+asserted in the parity test, not drift: (1) `cpv_features` takes a *list* of tender
+CPVs here (any-match) vs one CPV in the trainer; (2) `competition_score` is fixed at
+`UNKNOWN` here (a future tender's offer count is unknowable) vs the real count at
+train time; (3) `_norm_cpv` returns `""` for a no-digit input here vs `"00000000"`
+in the trainer (real CPVs are always numeric, so this never fires on live data).
 """
 from __future__ import annotations
 

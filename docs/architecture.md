@@ -140,8 +140,9 @@ API is unreachable.
 ### ML training dataset export (`exports/`)
 The full awards back-fill (~21k awards / ~15k companies over 24 months) is
 exported to CSV (`awards_training.csv`, `companies.csv`) as training data for the
-tender↔company lead-scoring model. The standalone scoring pipeline lives in
-`backend/easy_demo/` (its own README). Data-quality caveats — `contract_value_eur`
+tender↔company lead-scoring model. The v5 LR training harness
+(`exports_ml_pipeline.py`) consumes them and writes `exports/model_params.json`,
+which the in-app matcher loads. Data-quality caveats — `contract_value_eur`
 is **not** FX-converted (read it with `contract_currency`); `-1`/`0` are
 "not disclosed" sentinels; titles/descriptions are multilingual — are documented
 in [exports/README.md](../exports/README.md).

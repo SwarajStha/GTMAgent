@@ -114,7 +114,6 @@ GTMAgent/
 │   │   │                       disqualifier, embedder, semantic, rules, lr_weights
 │   │   ├── generation/       evidence, drafter, validator (stubs — endpoints draft inline)
 │   │   └── agent/            controller (planner-executor loop), tools, reflector
-│   ├── easy_demo/            standalone GTM lead-scoring ML pipeline (own README)
 │   ├── scripts/              ted_smoke, awards_smoke, agent_smoke — see scripts/README.md
 │   ├── tests/                pytest suite (~130 tests across 22 files)
 │   ├── alembic.ini           script_location = app/db/migrations

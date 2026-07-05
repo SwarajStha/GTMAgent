@@ -140,7 +140,7 @@ We've shipped **ingestion** (Jobs 1–3) plus the **matching pipeline**, a **two
 - **Matching** (`app/matching/`): two layers — `profile_builder.build_company_profiles()` derives the `company_profiles` supplier pool from award winners; `pipeline.MatchingPipeline.run()` ranks the pool for a tender. Embedder/weights are injectable so tests run torch-free.
 - **Agent** (`app/agent/`): `controller.py` runs a Claude tool-use loop; `tools.py` defines the 6 tools + read-only `query_db` guard; `reflector.py` summarises recent runs + feedback.
 - **Tests**: ~130 passing locally across 22 files (stub imports, health, config, ingestion, matching, agent, and per-router API tests against a real `gtm_test` Postgres). CI runs them on every push.
-- **ML export**: the full awards back-fill is exported to `exports/` (`awards_training.csv`, `companies.csv`) for the lead-scoring model. The standalone scoring pipeline lives in `backend/easy_demo/`.
+- **ML export**: the full awards back-fill is exported to `exports/` (`awards_training.csv`, `companies.csv`), which feeds the v5 LR training harness (`exports_ml_pipeline.py`) that produces `exports/model_params.json` for the in-app matcher.
 - **The empirically-hard TED API contract** — the TED v3 expert search rejects most "obvious" field names from the docs (`cpv-code` → use `classification-cpv`, `winner-name` → use `organisation-name-tenderer`, etc.). The current `TED_FIELDS` and `AWARD_FIELDS` lists were beaten into shape over multiple live iterations.
 
 ### What "live verified" means here
@@ -183,7 +183,7 @@ We've shipped **ingestion** (Jobs 1–3) plus the **matching pipeline**, a **two
 | **TED v3 API** | Public EU procurement-data API | `api.ted.europa.eu` — where all our tender notices and award notices come from. No auth required. |
 | **Anthropic API** | Claude LLM hosted service | Needs `ANTHROPIC_API_KEY` in `backend/.env`. Used for extraction, drafting, and the agent layer. |
 | **sentence-transformers** | Embedding model library | Loads `all-MiniLM-L6-v2` (384-d) on CPU for semantic similarity in the matcher. In `requirements-ml.txt` (heavy `torch` dep), lazy-imported so the core API/tests stay torch-free. |
-| **scikit-learn / joblib** | ML toolkit | Lead-scoring pipeline (`easy_demo/`) + the planned LR weight learner. Also in `requirements-ml.txt`. |
+| **scikit-learn / joblib** | ML toolkit | The v5 LR matcher (trained offline by `exports_ml_pipeline.py`) + the feedback-driven LR weight learner. Also in `requirements-ml.txt`. |
 
 ---
 

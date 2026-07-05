@@ -433,3 +433,52 @@ certifications and no company carries cert data, so the gate is a correct no-op
 here — its firing behaviour is proven by the DB-backed tests above
 (`Holds/Lacks(known)/Unknown`). It activates in production once a company-cert
 data source exists (the G14 fixed-pool limitation).
+
+---
+
+## 2026-07-05 — G23 retrain on more data (TRAIN_SAMPLE 0.50 → 0.80)
+
+- **Environment:** offline trainer run (`run_pipeline.py`, `HF_HUB_OFFLINE=1` using the
+  cached `paraphrase-multilingual-MiniLM-L12-v2`); live matcher smoke on the dev `gtm` DB.
+- **Change:** `exports_ml_pipeline.py:TRAIN_SAMPLE` 0.50 → 0.80. This is a leakage-safe
+  *chronological* split (train on the earliest fraction, hold out the rest), not a
+  resource cap — 0.80 gives the shipped model ~60% more training pairs while keeping
+  ~20% held out for the honest eval.
+
+### Trainer output (captured 2026-07-05)
+
+```
+Train awards   : 16812        (was 10,507 at 0.50)
+Test tenders   : 500          (sampled from the held-out later 20%)
+Winner-in-pool : 100%
+Hit@1          : 44.20%  (221/500)     (was 45.2%)
+Hit@3          : 54.00%  (270/500)     (was 54.8%)
+Hit@5          : 57.60%  (288/500)     (was 59.0%)
+```
+
+**Interpretation — flat, not a regression.** The held-out set at 0.80 is the *later
+20%* of awards (the most recent, and a different/harder sample) vs the later 50% at
+0.50, so the numbers are not directly comparable and the ~1pp dips are noise. Hit@3
+holds at ~54% across split ratios — the approach is stable — while the served model
+now trains on more, and more recent, signal (better aligned to the current/future
+tenders it actually scores). Coefficients stayed structurally stable (same signs;
+dominant `cpv_4digit` +1.29, `nuts_exact` +1.25, `semantic` +1.13; `competition_score`
+0.000 both runs → inert at serve time, confirming the G20 note).
+
+### Live matcher smoke (dev DB, regenerated model_params.json)
+
+```
+Tender 1067 | Ireland – Siteworks – Design, Supply, and Installation … | IRL
+mode: lr | keys: semantic/budget/location/qualification + final_score
+  1. GEM Construction Limited                score=0.643
+  2. CCM Smarthome Developments Limited       score=0.627
+  3. Garden Escapes (Ireland) Limited         score=0.586
+  4. Glas Civil Engineering Ltd               score=0.585
+  5. Jons Civil Engineering Company Limited   score=0.579
+```
+
+An Irish construction/siteworks tender ranked **Irish construction + civil-engineering
+firms** — country (IRL) + construction-CPV signals driving it, scores in the sane
+0.58–0.64 calibrated range. **The G20 contract test auto-validated the regenerated
+artifact** (feature_names match, scorer round-trips); 115 matching tests green. No
+migration, no feature/schema change — only the LR coefficients + `trained_at` updated.

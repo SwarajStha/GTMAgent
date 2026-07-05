@@ -71,7 +71,12 @@ RANDOM_STATE   = 42
 NEG_RATIO      = 5          # negatives per positive
 TRAIN_FRAC     = 0.80       # chronological split
 TOP_K          = 5          # evaluate Hit@1/3/5
-TRAIN_SAMPLE   = 0.50       # fraction of awards for training
+# Fraction of awards (chronologically earliest) used to TRAIN the LR; the rest are
+# held out to evaluate honest Hit@k on later/unseen tenders. This is a leakage-safe
+# split, not a resource cap. Raised 0.50→0.80 (G23) to give the shipped model ~60%
+# more training pairs while still holding out ~20% (~4k awards) for the eval that
+# produces the reported Hit@k. Company profiles are still built from ALL awards.
+TRAIN_SAMPLE   = 0.80       # fraction of awards for training
 TEST_SAMPLE    = 500        # tenders to predict at the end
 
 RATES_TO_EUR = {
@@ -81,6 +86,14 @@ RATES_TO_EUR = {
     "MKD":0.0163,"ALL":0.0105,
 }
 
+# Train/serve sync (G20): this feature math has a serving twin in
+# backend/app/matching/features.py. Change a feature here → port it there → the app
+# regenerates model_params.json from this script. Parity is enforced by
+# backend/tests/matching/test_feature_parity_v5.py (this module vs the app, output
+# for output) and test_feature_contract.py (FEATURE_NAMES vs the exported artifact).
+# Deliberate differences the parity test allows: the app's cpv_features takes a LIST
+# of tender CPVs (any-match) and its competition_score is fixed UNKNOWN (a future
+# tender's offer count can't be known at prediction time).
 FEATURE_NAMES = [
     "semantic_score",
     "cpv_4digit_score", "cpv_2digit_score",

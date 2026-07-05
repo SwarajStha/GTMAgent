@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-21T15:05:51.660095Z",
+  "generated_at": "2026-07-05T21:45:14.899296Z",
   "model": "Logistic Regression",
   "feature_names": [
     "semantic_score",
@@ -14,32 +14,32 @@
     "competition_score"
   ],
   "lr_coefficients": {
-    "semantic_score": 1.2004151966640553,
-    "cpv_4digit_score": 1.2594290443871057,
-    "cpv_2digit_score": -0.3961189241438098,
-    "nuts_exact_score": 1.1831294957310154,
-    "nuts_country_score": -0.15617235219920106,
-    "value_score": -0.11239864412540641,
-    "value_in_range_score": -0.11459427145313492,
-    "country_match_score": -0.38133738043714693,
-    "company_size_score": -0.37218656763381225,
+    "semantic_score": 1.1281626082080198,
+    "cpv_4digit_score": 1.292321248896941,
+    "cpv_2digit_score": -0.41538878574107635,
+    "nuts_exact_score": 1.2447667430382023,
+    "nuts_country_score": -0.12520467030238927,
+    "value_score": -0.10256223118598264,
+    "value_in_range_score": -0.16027811601717576,
+    "country_match_score": -0.41128067699775805,
+    "company_size_score": -0.2921818881621265,
     "competition_score": 0.0
   },
-  "train_awards": 10507,
+  "train_awards": 16812,
   "test_awards": 500,
   "neg_ratio": 5,
   "hard_negatives": true,
   "total_tenders": 500,
   "winner_unresolvable": 0,
-  "winner_filtered_out": 131,
+  "winner_filtered_out": 133,
   "null_breakdown": {
-    "winner_filtered_out": 131
+    "winner_filtered_out": 133
   },
   "winner_in_pool_rate": 1.0,
-  "hit_at_1": 0.452,
-  "hit_at_1_count": "226/500",
-  "hit_at_3": 0.548,
-  "hit_at_3_count": "274/500",
-  "hit_at_5": 0.59,
-  "hit_at_5_count": "295/500"
+  "hit_at_1": 0.442,
+  "hit_at_1_count": "221/500",
+  "hit_at_3": 0.54,
+  "hit_at_3_count": "270/500",
+  "hit_at_5": 0.576,
+  "hit_at_5_count": "288/500"
 }

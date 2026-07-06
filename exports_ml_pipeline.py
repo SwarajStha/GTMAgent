@@ -30,9 +30,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-# Unbuffered output
-sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf-8', buffering=1)
+# NOTE: the unbuffered-stdout reopen that used to live here was moved into main()
+# (see _force_line_buffered_stdio). Reopening sys.stdout/sys.stderr on their fds at
+# IMPORT time is hostile to pytest's output capture — it takes ownership of pytest's
+# capture file descriptors and closes them when collected, crashing collection with
+# "OSError: [Errno 9] Bad file descriptor". The G20 parity test importorskips this
+# module, so import must stay side-effect-free.
 
 import numpy as np
 import joblib
@@ -919,7 +922,19 @@ def evaluate(
 
 # ── Main ──────────────────────────────────────────────────────
 
+def _force_line_buffered_stdio() -> None:
+    """Reopen stdout/stderr line-buffered for live progress during a real run.
+
+    Kept OUT of module import (only called from main()) so importing this module —
+    e.g. the G20 parity test's importorskip — never touches process file descriptors,
+    which would corrupt pytest's output capture.
+    """
+    sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1)
+    sys.stderr = open(sys.stderr.fileno(), mode="w", encoding="utf-8", buffering=1)
+
+
 def main() -> None:
+    _force_line_buffered_stdio()
     print("=" * 60)
     print("Tender → Top-3 Company Matching Pipeline  v5")
     print("=" * 60)

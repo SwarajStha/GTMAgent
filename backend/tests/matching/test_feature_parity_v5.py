@@ -29,8 +29,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-pytest.importorskip("numpy")  # trainer imports numpy at module load
-v5 = pytest.importorskip("exports_ml_pipeline")
+# The trainer imports numpy (present in CI via pgvector) plus joblib/rapidfuzz/sklearn
+# (ML-only, requirements-ml.txt, absent in CI). importorskip catches that ImportError
+# → skips in CI, runs locally. exc_type is required so a genuine ImportError skips
+# rather than warning/erroring (pytest 9.1 default change).
+v5 = pytest.importorskip("exports_ml_pipeline", exc_type=ImportError)
 
 
 # ── shared feature order ────────────────────────────────────────────────────

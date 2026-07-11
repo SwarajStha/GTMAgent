@@ -10,7 +10,8 @@ const emailsStore = useEmailsStore()
 const tendersStore = useTendersStore()
 const selectedId = ref(matchesStore.items[0]?.id ?? '')
 const statusFilter = ref('all')
-const tenderFilter = ref('all')
+// Restore the last-selected tender from the store so it survives navigation.
+const tenderFilter = ref(matchesStore.selectedTenderId)
 const actionMessage = ref('')
 const weights = ref({
   semantic: 0.4,
@@ -53,8 +54,15 @@ onMounted(() => window.addEventListener('keydown', onPickerKeydown))
 onUnmounted(() => window.removeEventListener('keydown', onPickerKeydown))
 
 onMounted(async () => {
-  await Promise.all([matchesStore.fetchAll(), tendersStore.fetchAll()])
-  selectedId.value = matchesStore.items[0]?.id ?? ''
+  // Reload the matches for the restored tender selection (a specific tender or
+  // the global view), so returning to this screen shows what the operator was
+  // last looking at rather than always snapping back to the global top-N.
+  const params =
+    tenderFilter.value === 'all'
+      ? new URLSearchParams()
+      : new URLSearchParams({ tender_id: tenderFilter.value })
+  await Promise.all([matchesStore.fetchAll(params), tendersStore.fetchAll()])
+  selectedId.value = filteredMatches.value[0]?.id ?? matchesStore.items[0]?.id ?? ''
 })
 
 const percent = new Intl.NumberFormat('en-US', {
@@ -112,6 +120,7 @@ const selectedMatch = computed(
 // filtering whatever global slice happened to be loaded — keeps the list and the
 // detail panel in sync with the chosen tender.
 watch(tenderFilter, async (value) => {
+  matchesStore.selectedTenderId = value
   const params =
     value === 'all' ? new URLSearchParams() : new URLSearchParams({ tender_id: value })
   await matchesStore.fetchAll(params)
@@ -149,12 +158,16 @@ function resetWeights() {
   }
 }
 
+const emailDrafted = ref(false)
+
 async function generateEmail() {
   if (!selectedMatch.value) return
   actionMessage.value = ''
+  emailDrafted.value = false
   try {
     const draft = await emailsStore.generate(selectedMatch.value.id)
     actionMessage.value = `Draft generated: ${draft.subject}`
+    emailDrafted.value = true
   } catch {
     actionMessage.value = emailsStore.error ?? 'Email generation failed'
   }
@@ -403,6 +416,9 @@ async function submitFeedback(rating: 1 | -1) {
           </button>
           <span v-if="actionMessage" class="text-sm font-bold text-slate-500">
             {{ actionMessage }}
+            <RouterLink v-if="emailDrafted" to="/emails" class="ml-1 text-emerald-700 underline">
+              view in Emails
+            </RouterLink>
           </span>
         </div>
 

@@ -109,6 +109,11 @@ export const useMatchesStore = defineStore('matches', {
     error: null as string | null,
     feedbackError: null as string | null,
     source: 'sample' as 'api' | 'sample',
+    // Persist the operator's tender selection here (not in local component
+    // state) so navigating away from the Matches screen and back restores the
+    // chosen tender + its per-tender matches, instead of snapping to "All
+    // tenders" and reloading the global top-N (which drops niche matches).
+    selectedTenderId: 'all' as string,
   }),
   getters: {
     readyCount: (state) => state.items.filter((item) => item.status === 'ready').length,

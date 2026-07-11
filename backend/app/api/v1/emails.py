@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.db.models import CompanyProfile, Document, Email, Match, Tender
+from app.db.models import CompanyProfile, Document, Email, Feedback, Match, Tender
 from app.generation.drafter import EmailDrafter
 from app.generation.evidence import EvidenceExtractor
 
@@ -269,6 +269,30 @@ def generate_buyer_email(
     db.refresh(email)
 
     return _email_out(email, tender, anchor_company)
+
+
+@router.delete("/{email_id}")
+def delete_email(
+    email_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    """Delete a stored email draft.
+
+    Any feedback captured on this draft is *detached* (its `email_id` is set to
+    NULL) rather than cascade-deleted — the rating + feature snapshot stay a
+    durable training sample (same rationale as the `feedback.match_id` SET NULL
+    on re-match). Without this, the delete would violate `feedback_email_id_fkey`.
+    """
+    email = db.get(Email, email_id)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    db.execute(
+        sa.update(Feedback).where(Feedback.email_id == email_id).values(email_id=None)
+    )
+    db.delete(email)
+    db.commit()
+    return {"deleted": str(email_id)}
 
 
 @router.get("/{email_id}")

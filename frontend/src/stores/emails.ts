@@ -126,6 +126,10 @@ export const useEmailsStore = defineStore('emails', {
     error: null as string | null,
     feedbackError: null as string | null,
     source: 'sample' as 'api' | 'sample',
+    // Ids of drafts this session generated locally (and that are already
+    // committed server-side). Used to protect them from a racing fetchAll whose
+    // list query was issued before the insert committed — see fetchAll().
+    generatedIds: [] as string[],
   }),
   getters: {
     reviewCount: (state) => state.drafts.filter((draft) => draft.status === 'review').length,
@@ -144,7 +148,15 @@ export const useEmailsStore = defineStore('emails', {
           throw new Error(`Email API returned ${response.status}`)
         }
         const body = (await response.json()) as { items: ApiEmail[] }
-        this.drafts = body.items.map(toEmailDraft)
+        const serverDrafts = body.items.map(toEmailDraft)
+        const serverIds = new Set(serverDrafts.map((draft) => draft.id))
+        // Keep any email we just generated that this (possibly in-flight) list
+        // query missed because it ran before the insert committed. These ids are
+        // known-committed, so this never resurrects a genuinely deleted draft.
+        const pending = this.drafts.filter(
+          (draft) => this.generatedIds.includes(draft.id) && !serverIds.has(draft.id),
+        )
+        this.drafts = [...pending, ...serverDrafts]
         this.source = 'api'
       } catch (error) {
         this.error = error instanceof Error ? error.message : 'Email API request failed'
@@ -167,6 +179,7 @@ export const useEmailsStore = defineStore('emails', {
         const body = (await response.json()) as ApiEmail
         const draft = toEmailDraft(body)
         this.drafts = [draft, ...this.drafts.filter((item) => item.id !== draft.id)]
+        if (!this.generatedIds.includes(draft.id)) this.generatedIds.push(draft.id)
         this.source = 'api'
         return draft
       } catch (error) {
@@ -190,6 +203,7 @@ export const useEmailsStore = defineStore('emails', {
         const body = (await response.json()) as ApiEmail
         const draft = toEmailDraft(body)
         this.drafts = [draft, ...this.drafts.filter((item) => item.id !== draft.id)]
+        if (!this.generatedIds.includes(draft.id)) this.generatedIds.push(draft.id)
         this.source = 'api'
         return draft
       } catch (error) {
@@ -222,6 +236,25 @@ export const useEmailsStore = defineStore('emails', {
         throw error
       } finally {
         this.feedbackLoading = false
+      }
+    },
+    async deleteDraft(draftId: string) {
+      this.loading = true
+      this.error = null
+      try {
+        const response = await fetch(`/api/v1/emails/${draftId}`, { method: 'DELETE' })
+        // 404 means it's already gone server-side — treat as success and drop it
+        // locally so the UI reconciles either way.
+        if (!response.ok && response.status !== 404) {
+          throw new Error(`Delete email returned ${response.status}`)
+        }
+        this.drafts = this.drafts.filter((draft) => draft.id !== draftId)
+        this.generatedIds = this.generatedIds.filter((id) => id !== draftId)
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Delete email failed'
+        throw error
+      } finally {
+        this.loading = false
       }
     },
     updateDraft(draftId: string, updates: Partial<Pick<EmailDraft, 'body' | 'status'>>) {

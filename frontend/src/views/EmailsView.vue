@@ -114,6 +114,20 @@ function approveDraft() {
   emailsStore.updateDraft(selectedDraft.value.id, { status: 'approved' })
   actionMessage.value = 'Draft approved locally'
 }
+
+async function deleteDraft() {
+  const draft = selectedDraft.value
+  if (!draft) return
+  if (!window.confirm(`Delete the draft to ${draft.companyName}? This cannot be undone.`)) return
+  actionMessage.value = ''
+  try {
+    await emailsStore.deleteDraft(draft.id)
+    selectedId.value = filteredDrafts.value[0]?.id ?? emailsStore.drafts[0]?.id ?? ''
+    actionMessage.value = 'Draft deleted'
+  } catch {
+    actionMessage.value = emailsStore.error ?? 'Delete failed'
+  }
+}
 </script>
 
 <template>
@@ -217,6 +231,14 @@ function approveDraft() {
               </button>
               <button class="btn-secondary" type="button" @click="startEdit">Edit</button>
               <button class="btn-primary" type="button" @click="approveDraft">Approve</button>
+              <button
+                class="btn-secondary text-rose-600 hover:bg-rose-50"
+                type="button"
+                :disabled="emailsStore.loading"
+                @click="deleteDraft"
+              >
+                Delete
+              </button>
             </div>
           </div>
           <p v-if="actionMessage" class="mt-3 text-sm font-bold text-slate-500">

@@ -11,8 +11,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_db
-from app.api.v1.emails import generate_email, get_email, list_emails
-from app.db.models import CompanyProfile, Document, Email, Match, Tender
+from app.api.v1.emails import delete_email, generate_email, get_email, list_emails
+from app.db.models import CompanyProfile, Document, Email, Feedback, Match, Tender
 from app.main import app
 
 MATCH_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -276,3 +276,59 @@ def test_list_emails_returns_stored_drafts(db_session) -> None:
     assert result.total >= 1
     assert any(item.subject == "Hello supplier" for item in result.items)
     assert result.items[0].company.name == "MailCo"
+
+
+def test_delete_email_detaches_feedback(db_session) -> None:
+    """Deleting a draft removes it but keeps any feedback as a training sample.
+
+    `feedback.email_id` has no ON DELETE rule, so the handler must NULL it out
+    first — otherwise the delete violates `feedback_email_id_fkey`. The rating +
+    feature snapshot stay usable for retraining (same durability contract as the
+    `feedback.match_id` SET NULL on re-match).
+    """
+    tender = Tender(
+        ted_notice_id="EM-DEL-1",
+        title="Delete tender",
+        cpv_codes=["45000000"],
+        raw_json={"source": "test"},
+    )
+    company = CompanyProfile(name="DelCo", country="DE")
+    db_session.add_all([tender, company])
+    db_session.flush()
+    match = Match(tender_id=tender.id, company_id=company.id, final_score=0.7)
+    db_session.add(match)
+    db_session.flush()
+    email = Email(
+        match_id=match.id,
+        tender_id=tender.id,
+        recipient_type="supplier",
+        subject="Delete me",
+        body="Body text",
+        status="draft",
+    )
+    db_session.add(email)
+    db_session.flush()
+    feedback = Feedback(match_id=match.id, email_id=email.id, rating=1, comment="keep me")
+    db_session.add(feedback)
+    db_session.flush()
+    email_id = email.id
+    feedback_id = feedback.id
+
+    result = delete_email(email_id, db=db_session)
+
+    assert result == {"deleted": str(email_id)}
+    assert db_session.get(Email, email_id) is None
+    surviving = db_session.get(Feedback, feedback_id)
+    assert surviving is not None
+    assert surviving.email_id is None
+    assert surviving.rating == 1
+
+
+def test_delete_email_raises_404_when_missing() -> None:
+    db = MagicMock()
+    db.get.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        delete_email(EMAIL_ID, db=db)
+
+    assert exc_info.value.status_code == 404

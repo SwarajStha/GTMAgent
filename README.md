@@ -14,19 +14,17 @@ For the decision log see [docs/architecture.md](docs/architecture.md); for the s
 | 2 — Job 1 | TED Contract Notice poller + upsert | **Done — live-verified** |
 | 2 — Job 2 | Awards back-fill + entity resolution | **Done — full back-fill: ~21k awards / ~15k companies** |
 | 2 — Job 3 | Dossier downloader (PDFs from notice URLs) + ingestion CLI | **Done — live-verified** |
-| 2 — Job 4 | APScheduler in-process loop | Stub (`scheduler.py`) — not wired |
-| 2 — Understanding | Claude `FieldExtractor` + validator | Stubs only |
-| 3 | Matching (profile builder, disqualifier, embedder, semantic, rules) | **Done — multi-supplier pipeline, live-smoked** |
-| 4 | Generation (two-sided email backend: supplier + buyer drafts) | **Done — deterministic evidence-grounded drafts** |
-| 5 | Feedback capture endpoint | **Done** — LR weight retraining + auth still pending |
-| 6 | Agent (Claude tool-use orchestrator + reflection loop) | **Done — planner-executor loop over 6 tools** |
-| — | REST API (tenders/awards/companies/matches/emails/feedback/agent) | **Done — all routers implemented** |
-| — | Frontend (Tenders / Matches / Emails views wired to the API) | **Done — with sample-data fallback** |
+| 2 — Job 4 | APScheduler in-process loop | **Done — 4 cron jobs, opt-in via `SCHEDULER_ENABLED`** |
+| 2 — Understanding | Claude `FieldExtractor` + validator | **Done — persists structured `TenderProfile`** |
+| 3 | Matching (profile builder, disqualifier, embedder, semantic, rules) | **Done — v5 logistic-regression pipeline, live-smoked** |
+| 4 | Generation (two-sided email backend: supplier + buyer drafts) | **Done — Claude drafter (`claude-sonnet-4-6`) + deterministic fallback** |
+| 5 | Feedback capture endpoint | **Done — incl. LR-weight retraining from feedback; auth still pending** |
+| 6 | Agent (Claude tool-use orchestrator + reflection loop) | **Done — DB-first, streaming (SSE) + resumable, 8 tools** |
+| — | REST API (tenders/awards/companies/matches/emails/feedback/agent) | **Done — all 7 routers implemented** |
+| — | Frontend (7 views wired to the API) | **Done — with sample-data fallback** |
 | — | ML training dataset export (`exports/`) | **Done — for the lead-scoring model** |
 
-What is **not** wired yet: the APScheduler loop (Job 4), the Claude `FieldExtractor` understanding layer, LR-weight retraining from feedback, and auth/multi-tenancy. The email drafts and the supplier capability profiles are deterministic/thin in the MVP — see [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md) for the known scoring limitations.
-
-Latest commit: `f27f95a chore(data): add awards dataset export for ML` (branch `feat/pipeline-integration-ML-backend-frontend`).
+The one remaining gap is **auth / multi-tenancy** (deferred to a later phase — the LLM/ops endpoints are currently unauthenticated). The supplier capability profiles are still thin in the MVP — see [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md) for the known scoring limitations.
 
 ---
 
@@ -78,9 +76,9 @@ If `py -3.11` errors on Windows, install Python 3.11 from python.org and re-open
 - **Backend**: Python 3.11 / FastAPI 0.115 / Pydantic v2 / SQLAlchemy 2.x / Alembic / psycopg 3 / httpx / pgvector / PyMuPDF (dossier text)
 - **Database**: Postgres 16 + pgvector (`pgvector/pgvector:pg16`)
 - **Frontend**: Vue 3 / TypeScript / Vite 5 / Pinia / vue-router 4 / Tailwind 3
-- **ML / embeddings** (separate `requirements-ml.txt`, see below): `sentence-transformers` (the matcher uses `all-MiniLM-L6-v2`, 384-d, CPU-only) + `scikit-learn` / `joblib` (lead-scoring + future LR weight learning). Kept out of the core requirements because `torch` is heavy and the unit tests inject fake embedders.
-- **LLM**: Claude Sonnet 4.6 (`claude-sonnet-4-6`) via the Anthropic SDK — drives the agent orchestrator and reflection loop
-- **Scheduler**: APScheduler in-process (stub — not yet wired)
+- **ML / embeddings** (separate `requirements-ml.txt`, see below): `sentence-transformers` (the matcher uses `paraphrase-multilingual-MiniLM-L12-v2`, 384-d, CPU-only) + `scikit-learn` / `joblib` (v5 logistic-regression ranker + feedback retraining). Kept out of the core requirements because `torch` is heavy and the unit tests inject fake embedders.
+- **LLM**: Claude Sonnet 4.6 (`claude-sonnet-4-6`) via the Anthropic SDK — drives the agent orchestrator, email drafter, tender extraction, and reflection loop
+- **Scheduler**: APScheduler in-process — 4 cron jobs (contract poll / dossier sweep / award back-fill / reflection), opt-in via `SCHEDULER_ENABLED` (default off)
 - **CI**: GitHub Actions — pytest, frontend lint+build, Alembic migration smoke
 
 ### Why ML deps are split out
@@ -105,17 +103,17 @@ GTMAgent/
 │   │   ├── api/v1/           FastAPI routers — tenders, awards, companies,
 │   │   │                       matches, emails, feedback, agent (all implemented)
 │   │   ├── core/             config.py (pydantic-settings), logging.py
-│   │   ├── db/               models.py (11 tables), session.py, migrations/ (0001–0008)
+│   │   ├── db/               models.py (13 tables), session.py, migrations/ (0001–0015)
 │   │   ├── ingestion/        ted_client, awards_client, dossier_downloader,
 │   │   │                       entity_resolution, base_client, schemas, __main__ (CLI),
-│   │   │                       scheduler (stub)
-│   │   ├── understanding/    extractor, schemas, validator (stubs)
-│   │   ├── matching/         profile_builder (Layer 1), pipeline (Layer 2),
-│   │   │                       disqualifier, embedder, semantic, rules, lr_weights
-│   │   ├── generation/       evidence, drafter, validator (stubs — endpoints draft inline)
-│   │   └── agent/            controller (planner-executor loop), tools, reflector
+│   │   │                       scheduler (APScheduler, opt-in)
+│   │   ├── understanding/    extractor, schemas, validator, service (Claude FieldExtractor)
+│   │   ├── matching/         profile_builder (Layer 1), pipeline (Layer 2), disqualifier,
+│   │   │                       embedder, semantic, rules, features, lr_weights, money
+│   │   ├── generation/       evidence, drafter (Claude), validator
+│   │   └── agent/            controller (streaming, resumable), tools (8), reflector, progress
 │   ├── scripts/              ted_smoke, awards_smoke, agent_smoke — see scripts/README.md
-│   ├── tests/                pytest suite (~130 tests across 22 files)
+│   ├── tests/                pytest suite (276 tests across 34 files)
 │   ├── alembic.ini           script_location = app/db/migrations
 │   ├── requirements.txt      lean runtime deps (no torch)
 │   ├── requirements-ml.txt   sentence-transformers + scikit-learn + joblib
@@ -167,8 +165,8 @@ pip install -r requirements-dev.txt
 # If you hit SSL errors on PyPI, add:
 #   --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org
 cp .env.example .env       # then edit ANTHROPIC_API_KEY
-alembic upgrade head       # applies migrations 0001 → 0008
-pytest tests -v            # ~130 tests (needs the gtm_test DB — see backend/scripts/README.md)
+alembic upgrade head       # applies migrations 0001 → 0015
+pytest tests -v            # 276 tests (needs the gtm_test DB — see backend/scripts/README.md)
 uvicorn app.main:app --reload
 ```
 
@@ -244,15 +242,22 @@ All routers are mounted under `/api/v1` and documented interactively at http://l
 |---|---|---|
 | `/health` | GET | Liveness probe (used by Docker/CI/frontend) |
 | `/api/v1/tenders` · `/{id}` | GET | List/search tenders; detail includes raw TED payload |
+| `/api/v1/tenders/{id}/extract` | POST | Run the Claude Understanding layer → persist a structured `TenderProfile` |
+| `/api/v1/tenders/{id}/reports` | GET · POST | List / save agent analyses (narrative + supplier snapshot) for a tender |
 | `/api/v1/awards` · `/{id}` | GET | List/search award notices joined to resolved winner |
 | `/api/v1/companies` · `/{id}` | GET | Canonical award-winner companies + award-history rollups |
 | `/api/v1/matches` · `/{id}` | GET | Ranked tender × company-profile matches with score breakdown |
-| `/api/v1/matches/run/{tender_id}` | POST | Run the matching pipeline for a tender, persist `matches` |
+| `/api/v1/matches/run/{tender_id}` | POST | Run the matching pipeline for a tender, persist `matches` (optional `weights` body) |
+| `/api/v1/emails` | GET | List stored drafts (filter by `tender_id` / `recipient_type`) |
 | `/api/v1/emails/{match_id}/generate` | POST | Supplier-facing outreach draft (evidence-grounded) |
 | `/api/v1/emails/buyer/{tender_id}/generate` | POST | Buyer-facing digest of top supplier matches |
-| `/api/v1/emails/{email_id}` | GET | Fetch a stored draft |
+| `/api/v1/emails/{email_id}` | GET · DELETE | Fetch / delete a stored draft |
 | `/api/v1/feedback` | POST | Thumbs-up/down on a match (+ optional email) |
-| `/api/v1/agent/run` | POST | Run the Claude tool-use agent on a free-text goal (`dry_run` defaults to true) |
+| `/api/v1/feedback/retrain` | POST | Retrain the LR weights from accumulated feedback |
+| `/api/v1/agent/run` | POST | Run the Claude tool-use agent on a free-text goal — streams SSE (`dry_run` defaults to true) |
+| `/api/v1/agent/run/{session_id}/continue` | POST | Resume a paused agent run (answers an `ask_user` prompt) — streams SSE |
+| `/api/v1/agent/reflect` | POST | Run one reflection cycle (metrics + optional LR retrain) |
+| `/api/v1/agent/scheduler` | POST | Runtime start/stop/status of the in-process scheduler |
 
 ---
 
@@ -287,9 +292,9 @@ Once the DB is up, you can browse it via:
 
 GitHub Actions runs three jobs on every push and PR to `main`:
 
-1. **backend-test** — Python 3.11, install dev deps, spin up a Postgres service + create `gtm_test`, `pytest tests` (~130 tests; the matching/agent tests inject fakes so the run stays torch-free)
+1. **backend-test** — Python 3.11, install dev deps, spin up a Postgres service + create `gtm_test`, `pytest tests` (276 tests; the matching/agent tests inject fakes so the run stays torch-free)
 2. **frontend-lint** — Node 20, `npm ci`, `npm run lint`, `npm run build`
-3. **migration-check** — Spins up a real `pgvector/pgvector:pg16` service, runs `alembic upgrade head` (0001 → 0008)
+3. **migration-check** — Spins up a real `pgvector/pgvector:pg16` service, runs `alembic upgrade head` (0001 → 0015)
 
 ---
 

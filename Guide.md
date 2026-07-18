@@ -4,8 +4,8 @@ Welcome! This guide explains what GTMAgent is, what we've built so far, and how 
 
 Where this guide is *not* enough, the canonical sources are:
 - [README.md](README.md) — user-facing quickstart
-- [CLAUDE.md](CLAUDE.md) — internal engineering scratchpad (the source of truth; gitignored on Swaraj's machine but kept up to date there)
 - [docs/architecture.md](docs/architecture.md) — decision log
+- [docs/system_architecture.md](docs/system_architecture.md) — current system architecture (swim-lane view)
 - [docs/Database_Explanation.md](docs/Database_Explanation.md) — table-by-table reference
 - [backend/scripts/README.md](backend/scripts/README.md) — smoke harnesses & DB cheatsheet
 
@@ -139,7 +139,7 @@ We've shipped **ingestion** (Jobs 1–3) plus the **matching pipeline**, a **two
 - **Entity resolution** (`entity_resolution.py`): **Identifier-first** — matches on `registration_id` (tax id from TED) when present, else on a normalised `resolution_key` (strip punctuation + legal suffixes like "GmbH"/"AG"/"Ltd"). Merges variant spellings sharing an id; splits distinct entities sharing a trading name. `clean_identifier()` rejects junk ids that would false-merge companies.
 - **Matching** (`app/matching/`): two layers — `profile_builder.build_company_profiles()` derives the `company_profiles` supplier pool from award winners; `pipeline.MatchingPipeline.run()` ranks the pool for a tender. Embedder/weights are injectable so tests run torch-free.
 - **Agent** (`app/agent/`): `controller.py` runs a Claude tool-use loop; `tools.py` defines the 6 tools + read-only `query_db` guard; `reflector.py` summarises recent runs + feedback.
-- **Tests**: ~130 passing locally across 22 files (stub imports, health, config, ingestion, matching, agent, and per-router API tests against a real `gtm_test` Postgres). CI runs them on every push.
+- **Tests**: 276 passing locally across 34 files (stub imports, health, config, ingestion, matching, agent, understanding, and per-router API tests against a real `gtm_test` Postgres). CI runs them on every push.
 - **ML export**: the full awards back-fill is exported to `exports/` (`awards_training.csv`, `companies.csv`), which feeds the v5 LR training harness (`exports_ml_pipeline.py`) that produces `exports/model_params.json` for the in-app matcher.
 - **The empirically-hard TED API contract** — the TED v3 expert search rejects most "obvious" field names from the docs (`cpv-code` → use `classification-cpv`, `winner-name` → use `organisation-name-tenderer`, etc.). The current `TED_FIELDS` and `AWARD_FIELDS` lists were beaten into shape over multiple live iterations.
 
@@ -244,7 +244,7 @@ Already done: ingestion (Jobs 1–3), the matching pipeline, the two-sided email
 4. **Matching, the two-sided email backend, the REST API, and the Claude agent are all built and working.** Still stubs: the APScheduler loop, the Claude understanding/`FieldExtractor` layer, LR-weight retraining, and auth.
 5. **The database has 11 tables in 2 sub-graphs**: ingestion (`tenders`, `awards`, `companies`, `documents`) and matching/emails/agent (`company_profiles`, `matches`, `emails`, `feedback`, `embeddings`, `agent_runs`) — bridged by `company_profiles.source_company_id`. Migration head is `0008`.
 6. **The TED API contract is empirically discovered, not documented** — check the supported-fields list in a 400 response before touching `TED_FIELDS` / `AWARD_FIELDS`. Don't trust the official docs over the existing code.
-7. **CI runs 3 jobs on every push**: backend pytest (~130 tests, against a `gtm_test` Postgres), frontend lint+build, and an Alembic migration check against a fresh pgvector container.
+7. **CI runs 3 jobs on every push**: backend pytest (276 tests, against a `gtm_test` Postgres), frontend lint+build, and an Alembic migration check against a fresh pgvector container.
 
 ---
 
@@ -329,7 +329,7 @@ pip install -r requirements-dev.txt
 # optional — only for REAL semantic matching / building company_profile embeddings:
 #   pip install -r requirements-ml.txt   (heavy: pulls torch)
 alembic upgrade head            # applies migrations 0001 → 0008
-pytest tests -v                 # ~130 tests (needs the gtm_test DB — see Step 6)
+pytest tests -v                 # 276 tests (needs the gtm_test DB — see Step 6)
 ```
 
 ### Step 6 — Create the test database (one-time)
@@ -341,7 +341,7 @@ docker exec gtmagent-db-1 psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
 docker exec gtmagent-db-1 psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
 ```
 
-Re-run `pytest tests -v` — all ~130 tests should now pass on Postgres.
+Re-run `pytest tests -v` — all 276 tests should now pass on Postgres.
 
 ### Step 7 — Start the backend dev server
 
@@ -403,9 +403,9 @@ docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer
 
 - **First `docker compose up -d db`** pulls the `pgvector/pgvector:pg16` image (~400 MB). Takes 30–60 seconds depending on connection.
 - **First `pip install -r requirements-dev.txt`** downloads and builds wheels for ~40 packages. Takes 2–5 minutes. PyMuPDF and pgvector may compile from source briefly.
-- **First `npm ci`** downloads ~300 MB into `node_modules/`. Takes 1–2 minutes. You may see deprecation warnings — they're benign (see [CLAUDE.md §11 — esbuild advisory](CLAUDE.md)).
-- **First `alembic upgrade head`** runs 8 migrations in sequence and prints `INFO  [alembic.runtime.migration] Running upgrade ...` lines. Takes <2 seconds.
-- **First `pytest tests -v`** — ~130 tests, takes ~10–20 seconds. If any test fails on first run, the most likely cause is that you forgot Step 6 (create `gtm_test` database) — fix that and re-run.
+- **First `npm ci`** downloads ~300 MB into `node_modules/`. Takes 1–2 minutes. You may see deprecation warnings — they're benign (a dev-server-only esbuild advisory that doesn't affect production builds).
+- **First `alembic upgrade head`** runs the migrations in sequence and prints `INFO  [alembic.runtime.migration] Running upgrade ...` lines. Takes <2 seconds.
+- **First `pytest tests -v`** — 276 tests, takes ~10–20 seconds. If any test fails on first run, the most likely cause is that you forgot Step 6 (create `gtm_test` database) — fix that and re-run.
 - **Browser loads the Home view in ~300ms** with a clean "Backend status: ok" line. If that line says "Backend status: error" or never shows, your `uvicorn` isn't running or the Vite proxy can't reach it — check that uvicorn shows traffic in its log when you reload the page.
 
 ### Common Mac-specific gotchas
@@ -431,9 +431,9 @@ docker compose down -v          # also drops the volume; you'll need to re-run `
 
 ## Where to ask questions
 
-- **Architecture / why-is-it-shaped-this-way**: [docs/architecture.md](docs/architecture.md) and [CLAUDE.md](CLAUDE.md).
+- **Architecture / why-is-it-shaped-this-way**: [docs/architecture.md](docs/architecture.md) and [docs/system_architecture.md](docs/system_architecture.md).
 - **Database tables**: [docs/Database_Explanation.md](docs/Database_Explanation.md).
-- **TED API quirks / field names**: [CLAUDE.md §14 (CN) and §15 (CAN)](CLAUDE.md) — read these BEFORE editing any ingestion field list.
+- **TED API quirks / field names**: the field lists + inline comments in [backend/app/ingestion/ted_client.py](backend/app/ingestion/ted_client.py) (contract notices) and [backend/app/ingestion/awards_client.py](backend/app/ingestion/awards_client.py) (award notices) — read these BEFORE editing any ingestion field list.
 - **Smoke harnesses & DB cheatsheet**: [backend/scripts/README.md](backend/scripts/README.md).
 - **Future-work design notes (agent layer, PDF scraping)**: [docs/Notes.md](docs/Notes.md).
 - **Anything else**: ping Swaraj on the group chat.

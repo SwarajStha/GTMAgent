@@ -56,17 +56,23 @@ if USE_MINILM:
         USE_MINILM = False
 
 # ── Configuration ────────────────────────────────────────────
+# Layout note: the bulky training INPUTS and trainer BYPRODUCTS live under
+# archive/data-exports/ (regenerable, not needed to run the app — see
+# archive/README.md). The one file the running app depends on, model_params.json,
+# stays in exports/ (app/matching/lr_weights.py loads it from repo-root/exports/).
 EXPORTS_DIR    = Path(__file__).parent / "exports"
-AWARDS_PATH    = EXPORTS_DIR / "awards_training.csv"
-COMPANIES_PATH = EXPORTS_DIR / "companies.csv"
-OUTPUT_PATH    = EXPORTS_DIR / "top3_results.json"
-REPORT_PATH    = EXPORTS_DIR / "model_report.json"
-MODEL_PATH     = EXPORTS_DIR / "company_matcher.joblib"
+ARCHIVE_DIR    = Path(__file__).parent / "archive" / "data-exports"
+AWARDS_PATH    = ARCHIVE_DIR / "awards_training.csv"
+COMPANIES_PATH = ARCHIVE_DIR / "companies.csv"
+OUTPUT_PATH    = ARCHIVE_DIR / "top3_results.json"
+REPORT_PATH    = ARCHIVE_DIR / "model_report.json"
+MODEL_PATH     = ARCHIVE_DIR / "company_matcher.joblib"
 # Plain-JSON model params for the in-app matcher (app/matching/lr_weights.py):
 # coefficients alone are not enough to reproduce predict_proba — the LR was fit
 # on StandardScaler-normalised features, so the app also needs the intercept and
 # the scaler mean/scale. This file is the contract between v5 (trains) and the
 # app (serves), so the app doesn't have to load the sklearn-version-coupled joblib.
+# It is the SOLE trainer output that stays in exports/ (the app reads it there).
 MODEL_PARAMS_PATH = EXPORTS_DIR / "model_params.json"
 
 MINILM_MODEL   = "paraphrase-multilingual-MiniLM-L12-v2"

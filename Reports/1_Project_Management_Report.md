@@ -350,7 +350,7 @@ Actions CI runs the backend test suite (~227 tests, kept torch-free via injected
 fake embedders), frontend lint+build, and an Alembic migration smoke against a
 real pgvector container. Schema changes ship as additive Alembic migrations
 (`0001`→`0010`). A recurring **find-a-gap → fix → verify** loop (documented in
-`docs/Notes.md` and `docs/integration_gap_tracker.md`) drove iterative quality:
+`archive/internal-logs/Notes.md` and `archive/internal-logs/integration_gap_tracker.md`) drove iterative quality:
 e.g. discovering via live smoke that `qualification` scored 0 for every match,
 then fixing it with CPV-prefix partial credit and re-verifying that 89/100 top
 matches then scored > 0.
@@ -422,7 +422,7 @@ by Claude.
 > *Resolved since the 2026-06-21 draft:* the APScheduler loop (G13), the Understanding
 > layer + cert gate (G11/G12), reflection→behaviour wiring (G9), the awards/companies/
 > agent UI + persisted weights (G15/G16), and the agent rework + result actions
-> (G22/G28) all shipped — see `docs/integration_gap_tracker.md`.
+> (G22/G28) all shipped — see `archive/internal-logs/integration_gap_tracker.md`.
 - **Future-work candidates** (catalogued, not committed): Vision-LLM blueprint
   parsing; Neo4j incumbency knowledge graph; embedding ensemble (adding
   `all-mpnet-base-v2` and `multilingual-e5-large`).
@@ -446,7 +446,7 @@ Qualitative live-smoke evidence is strong: on a Czech road-resurfacing tender th
 top matches are genuine Czech road builders (EUROVIA, STRABAG, SWIETELSKY, PORR);
 after enriching capability text, semantic cosines for relevant matches rose from
 ~0.24–0.43 to 0.67–0.82 and win-probabilities from ~0.27 to ~0.79. See
-`docs/matching_pipeline_smoke_record.md`.
+`archive/internal-logs/matching_pipeline_smoke_record.md`.
 
 ---
 

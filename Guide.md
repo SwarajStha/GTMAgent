@@ -148,7 +148,7 @@ We've shipped **ingestion** (Jobs 1–3) plus the **matching pipeline**, a **two
 - `tenders` holds real rows from `api.ted.europa.eu` (DE/CZ/CH/FR/LV in the original smoke).
 - `awards` / `companies` hold the full 24-month back-fill — **~21,015 awards / ~15,129 companies** (exported to `exports/`).
 - `documents` rows distinguish successful PDF downloads from portal-locked / non-PDF failures.
-- The matching pipeline has been live-smoked end-to-end on real data (profiles → ranked matches → buyer email) — see [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md).
+- The matching pipeline has been live-smoked end-to-end on real data (profiles → ranked matches → buyer email) — see [archive/internal-logs/matching_pipeline_smoke_record.md](archive/internal-logs/matching_pipeline_smoke_record.md).
 
 ---
 
@@ -229,7 +229,7 @@ Already done: ingestion (Jobs 1–3), the matching pipeline, the two-sided email
 
 - **Job 4 — APScheduler loop** — Wire `app/ingestion/scheduler.py` so the CLI runs automatically (daily tender poll, weekly awards back-fill).
 - **Understanding layer** — `FieldExtractor` using Claude tool-use to turn raw `tenders.raw_json` + `documents.extracted_text` into a clean `TenderProfile`, plus a post-extraction validator. The matcher reads columns/dossier text directly today.
-- **Phase 3 — scoring quality** — CPV-prefix matching for the qualification score, and richer `company_profiles` capability text (from dossiers / scraping) so semantic scores stop being thin. See [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md).
+- **Phase 3 — scoring quality** — CPV-prefix matching for the qualification score, and richer `company_profiles` capability text (from dossiers / scraping) so semantic scores stop being thin. See [archive/internal-logs/matching_pipeline_smoke_record.md](archive/internal-logs/matching_pipeline_smoke_record.md).
 - **Phase 4 — Claude-written emails** — fill in `app/generation/` (`EvidenceExtractor` / `EmailDrafter` with an evidence-only constraint / `EmailValidator`) and swap the inline deterministic drafter for a Claude call.
 - **Phase 5 — Feedback → retraining + auth** — the LR weight retraining job that consumes `feedback`, plus basic multi-tenant auth.
 - **Minor follow-ups** — multi-page TED pagination (`iterationNextToken`) untested at scale; favicon 404; extend `LEGAL_SUFFIXES` to non-Latin scripts (Bulgarian `ООД`, Polish `Sp. z o.o.`, etc.); add `_` to entity-resolution punctuation set.
@@ -435,7 +435,7 @@ docker compose down -v          # also drops the volume; you'll need to re-run `
 - **Database tables**: [docs/Database_Explanation.md](docs/Database_Explanation.md).
 - **TED API quirks / field names**: the field lists + inline comments in [backend/app/ingestion/ted_client.py](backend/app/ingestion/ted_client.py) (contract notices) and [backend/app/ingestion/awards_client.py](backend/app/ingestion/awards_client.py) (award notices) — read these BEFORE editing any ingestion field list.
 - **Smoke harnesses & DB cheatsheet**: [backend/scripts/README.md](backend/scripts/README.md).
-- **Future-work design notes (agent layer, PDF scraping)**: [docs/Notes.md](docs/Notes.md).
+- **Future-work design notes (agent layer, PDF scraping)**: [archive/internal-logs/Notes.md](archive/internal-logs/Notes.md).
 - **Anything else**: ping Swaraj on the group chat.
 
 Welcome aboard 🚧

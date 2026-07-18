@@ -16,7 +16,7 @@ Current contents:
 > API "peek" phase and richer per-notice logging for debugging field-mapping
 > surprises. There is no dedicated matching smoke script yet; to exercise the
 > matching pipeline end-to-end, use the copy-paste reproduction snippet in
-> [docs/matching_pipeline_smoke_record.md](../../docs/matching_pipeline_smoke_record.md)
+> [archive/internal-logs/matching_pipeline_smoke_record.md](../../archive/internal-logs/matching_pipeline_smoke_record.md)
 > or the API (`POST /api/v1/matches/run/{tender_id}`).
 
 ---

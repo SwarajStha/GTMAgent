@@ -56,7 +56,7 @@ runs (`POST /api/v1/matches/run/{id}` or `build_company_profiles`).
   violation — G26).
 - Embedder and weights are **injectable** so the pipeline's unit tests run
   without MiniLM/torch. Live-smoked 2026-06-16 — see
-  [matching_pipeline_smoke_record.md](matching_pipeline_smoke_record.md).
+  [matching_pipeline_smoke_record.md](../archive/internal-logs/matching_pipeline_smoke_record.md).
 
 ### Generation — two-sided, evidence-grounded email backend (`app/api/v1/emails.py`)
 Two recipient types share the `emails` table (`recipient_type` column):
@@ -84,7 +84,7 @@ Every LLM path is offline-safe: a deterministic fallback runs when no
 `ANTHROPIC_API_KEY` is configured, and tests inject fake clients.
 
 ### Agent — native Anthropic tool-use, planner-executor + reflection (`app/agent/`)
-Built on the native Anthropic SDK (no LangGraph/CrewAI — see [Notes.md](Notes.md)).
+Built on the native Anthropic SDK (no LangGraph/CrewAI — see [Notes.md](../archive/internal-logs/Notes.md)).
 **Reworked 2026-06-30/07-01 (G22 + G28) into a DB-first, streaming, resumable loop**
 after a live demo exposed that the old design hit live TED and ran a bulk dossier
 sweep *during a "dry run"*, drained Claude credits, and hung unkillably.
@@ -124,7 +124,7 @@ match to `POST /emails/{match_id}/generate`.
 - **`query_db` is read-only AND savepoint-isolated** — a single leading-`SELECT`
   with a whole-word write-verb blocklist (`\binsert\b`, `\bcreate\b`, …; the `\b`
   boundaries spare legit columns like `created_at` — see
-  [integration_gap_tracker.md](integration_gap_tracker.md) R6), run inside a
+  [integration_gap_tracker.md](../archive/internal-logs/integration_gap_tracker.md) R6), run inside a
   `begin_nested()` SAVEPOINT so a bad query (the model guessing a wrong column)
   can't poison the shared run transaction.
 - **Bounded loop** (max 20 turns → partial progress on overflow) keeps cost and
@@ -166,7 +166,7 @@ Alembic upgrade check against a real pgvector service container.
 ## Deferred / not in scope yet
 
 > Several items previously listed here shipped in the 2026-06-21→07-01 sprints —
-> see `docs/integration_gap_tracker.md` for the authoritative status. **Now done:**
+> see `archive/internal-logs/integration_gap_tracker.md` for the authoritative status. **Now done:**
 > APScheduler Job 4 (G13), the Understanding layer (G11), LR retraining from feedback
 > (G8), Claude-written emails (G10), the awards/companies/agent UI + persisted weights
 > (G15/G16), the **agent rework** (DB-first, streaming, resumable, caged tools — G22),
@@ -182,7 +182,7 @@ Alembic upgrade check against a real pgvector service container.
   Understanding layer's extracted `required_certifications`, stays inert in
   production: there is no company-cert data to gate against. The lift path is a
   Phase-5 scraped/enriched profile source (which also activates G12). Per-portal
-  dossier scraping is deferred (see [Notes.md](Notes.md)).
+  dossier scraping is deferred (see [Notes.md](../archive/internal-logs/Notes.md)).
 - **Frontend for awards / companies / agent + persisted weights (G15/G16)** — the
   highest-value remaining band; APIs exist, the UI does not.
 - Authentication & multi-tenant separation — Phase 5.

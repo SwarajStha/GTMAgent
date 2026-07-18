@@ -24,7 +24,7 @@ For the decision log see [docs/architecture.md](docs/architecture.md); for the s
 | — | Frontend (7 views wired to the API) | **Done — with sample-data fallback** |
 | — | ML training dataset export (`exports/`) | **Done — for the lead-scoring model** |
 
-The one remaining gap is **auth / multi-tenancy** (deferred to a later phase — the LLM/ops endpoints are currently unauthenticated). The supplier capability profiles are still thin in the MVP — see [docs/matching_pipeline_smoke_record.md](docs/matching_pipeline_smoke_record.md) for the known scoring limitations.
+The one remaining gap is **auth / multi-tenancy** (deferred to a later phase — the LLM/ops endpoints are currently unauthenticated). The supplier capability profiles are still thin in the MVP — see [archive/internal-logs/matching_pipeline_smoke_record.md](archive/internal-logs/matching_pipeline_smoke_record.md) for the known scoring limitations.
 
 ---
 
@@ -121,12 +121,18 @@ GTMAgent/
 │   ├── .env.example          template
 │   └── Dockerfile
 ├── frontend/
-│   └── src/                  Vue views (Home/Tenders/Matches/Emails), Pinia stores, router
-├── exports/                  ML training dataset (awards_training.csv, companies.csv) + README
+│   └── src/                  Vue views (7: Home/Tenders/Matches/Emails/Awards/
+│                               Companies/Agent), Pinia stores, router
+├── exports/                  model_params.json — the runtime LR matcher artifact (+ README)
 ├── scripts/
 │   ├── init-pgvector.sql     CREATE EXTENSION IF NOT EXISTS vector (runs on first DB init)
-│   └── test_ted_api.py       teammate's parallel TED v1 private-search exploration
-├── docs/                     architecture, Database_Explanation, Notes, smoke records, plans
+│   └── seed/                 curated demo seed + loader (see scripts/seed/README.md)
+├── docs/                     architecture, system_architecture, Database_Explanation,
+│                               agentic_behavior_description
+├── archive/                  provenance only — training data, planning docs, internal
+│                               logs, samples (not needed to run; see archive/README.md)
+├── Reports/                  graded course deliverables (User Guide, PM, UAT, Safety)
+├── exports_ml_pipeline.py    v5 matcher trainer (+ run_pipeline.py, README_ML_PIPELINE.md)
 ├── docker-compose.yml        db + backend + frontend
 ├── .github/workflows/ci.yml  3 CI jobs
 ├── Guide.md                  teammate onboarding guide
@@ -148,6 +154,11 @@ Once it's up:
 - API health: http://localhost:8000/health
 - Frontend: http://localhost:5173
 - Postgres: `localhost:5432` (direct) or `localhost:6543` (pooled alias) — same DB, two ports
+
+> The backend image does **not** auto-migrate, so the database starts empty. Create
+> the schema — `docker compose run --rm backend alembic upgrade head` (no host Python
+> needed) — then **load the demo seed (step 3)** to see the UI populated. Until then
+> the API is live but the tables don't exist yet.
 
 ### 2. Local dev loop (recommended once you're iterating)
 
@@ -195,7 +206,25 @@ npm ci          # use ci, not install — respects the committed lockfile
 npm run dev
 ```
 
-### 3. Run the ingestion pipeline (CLI)
+### 3. See it populated — load the demo seed
+
+`docker compose up` starts with an **empty** database. To browse real content
+without running a live TED ingestion, load the bundled ~2 MB demo seed once the
+schema exists (after `alembic upgrade head` from step 2 — or, with no host venv,
+`docker compose run --rm backend alembic upgrade head`):
+
+```sh
+./scripts/seed/load_seed.sh                     # macOS / Linux / Git Bash
+powershell -File scripts\seed\load_seed.ps1     # Windows PowerShell
+```
+
+It loads a curated, referentially-consistent slice (the 13 tenders that have
+matches + their matches, companies, awards, emails, and saved reports). Details
+and what's included: [scripts/seed/README.md](scripts/seed/README.md). The seeded
+emails/reports are pre-generated so they display without an `ANTHROPIC_API_KEY`;
+live LLM features (the agent, new drafts) still need one.
+
+### 4. Run the ingestion pipeline (CLI)
 
 All three ingestion jobs are exposed through one CLI (`backend/app/ingestion/__main__.py`). From inside `backend/` with the venv active:
 
@@ -215,13 +244,13 @@ python backend\scripts\awards_smoke.py --live   # writes awards + resolves compa
 python backend\scripts\agent_smoke.py           # exercises the Claude agent loop (dry-run default)
 ```
 
-### 4. Run matching + generation
+### 5. Run matching + generation
 
 Once tenders, awards, and companies exist, build the supplier pool and rank it for a tender. This needs the ML deps (`requirements-ml.txt`):
 
 ```powershell
 # 1. Layer 1 — derive company_profiles (capability text + MiniLM embedding) from award winners
-#    (call build_company_profiles(session); see docs/matching_pipeline_smoke_record.md)
+#    (call build_company_profiles(session); see archive/internal-logs/matching_pipeline_smoke_record.md)
 # 2. Layer 2 — rank the pool for a tender and persist `matches`:
 curl -X POST http://localhost:8000/api/v1/matches/run/1
 # 3. Draft outreach for one match (supplier-facing):
@@ -230,7 +259,7 @@ curl -X POST http://localhost:8000/api/v1/emails/<match_id>/generate
 curl -X POST http://localhost:8000/api/v1/emails/buyer/1/generate
 ```
 
-`docs/matching_pipeline_smoke_record.md` has a copy-paste reproduction script and the current scoring caveats.
+`archive/internal-logs/matching_pipeline_smoke_record.md` has a copy-paste reproduction script and the current scoring caveats.
 
 ---
 

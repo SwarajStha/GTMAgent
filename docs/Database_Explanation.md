@@ -46,7 +46,7 @@ Reference for teammates. Snapshot of the GTMAgent Postgres schema as of **2026-0
 > to [`exports/`](../exports/README.md)). `tenders` / `company_profiles` /
 > `matches` / `emails` reflect the matching-pipeline smoke run (one tender ranked,
 > top suppliers drafted) — see
-> [matching_pipeline_smoke_record.md](matching_pipeline_smoke_record.md).
+> [matching_pipeline_smoke_record.md](../archive/internal-logs/matching_pipeline_smoke_record.md).
 
 ## Relationship map
 
@@ -463,7 +463,7 @@ Still pending:
 5. **Job 4 — APScheduler loop** — run Jobs 1–3 on a schedule (daily tender poll, weekly awards back-fill). CLI exists; the loop is a stub.
 6. **Understanding layer** — Claude `FieldExtractor` to turn raw notices + dossier text into a structured `TenderProfile`.
 7. **Phase 5 — feedback → retraining** — `feedback` is captured; the LR weight learner that retrains from it (and refreshes embeddings) is not yet wired. Also where multi-tenant auth lands.
-8. **Richer `company_profiles`** — enrich capability text from dossier text / web scraping so semantic scores stop being thin (see [matching_pipeline_smoke_record.md](matching_pipeline_smoke_record.md)).
+8. **Richer `company_profiles`** — enrich capability text from dossier text / web scraping so semantic scores stop being thin (see [matching_pipeline_smoke_record.md](../archive/internal-logs/matching_pipeline_smoke_record.md)).
 
 ---
 

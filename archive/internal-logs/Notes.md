@@ -412,7 +412,7 @@ G15/G16 (frontend), G19/G20 (hygiene).
 
 ## Agentic Flow Decision
 
-Quick context check first: there's already a Phase 6 scaffold at [backend/app/agent/controller.py](../backend/app/agent/controller.py) ("Claude tool-use orchestrator that exposes ingestion/matching/generation as tools"), and CLAUDE.md §9 frames it as "AgentController exposes ingestion/matching/generation as Claude tools and drives multi-step workflows". So the agentic layer is already part of the plan — what hasn't been settled is *how agentic*, and where it adds real value vs. just being a thin wrapper over deterministic code.
+Quick context check first: there's already a Phase 6 scaffold at [backend/app/agent/controller.py](../../backend/app/agent/controller.py) ("Claude tool-use orchestrator that exposes ingestion/matching/generation as tools"), and CLAUDE.md §9 frames it as "AgentController exposes ingestion/matching/generation as Claude tools and drives multi-step workflows". So the agentic layer is already part of the plan — what hasn't been settled is *how agentic*, and where it adds real value vs. just being a thin wrapper over deterministic code.
 
 Four ways to frame the agentic role, in increasing autonomy:
 

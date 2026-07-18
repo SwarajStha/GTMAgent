@@ -15,7 +15,7 @@
 | Matches persisted | **1,645** | pipeline output |
 | Embedding model | `paraphrase-multilingual-MiniLM-L12-v2`, **384-dim**, CPU, L2-normalised | [embedder.py](backend/app/matching/embedder.py) |
 | Ranking model | **Logistic Regression, 10 features**, trained on 16,812 awards | [model_params.json](exports/model_params.json) |
-| Model accuracy (held-out) | **Hit@1 44.2% · Hit@3 54.0% · Hit@5 57.6%** | [model_report.json](exports/model_report.json) |
+| Model accuracy (held-out) | **Hit@1 44.2% · Hit@3 54.0% · Hit@5 57.6%** | [model_report.json](archive/data-exports/model_report.json) |
 | LLM (agent + email + extraction) | Claude `claude-sonnet-4-6` via **native Anthropic SDK tool-use** (not MCP) | [config.py](backend/app/core/config.py) |
 | Test suite | **346 backend tests** | `backend/tests/` |
 
@@ -297,7 +297,7 @@ The email drafter, tender extractor, and reflection narrator each get a short ta
 - Interpretable (each match ships per-feature contributions → the "explanation"), trains in seconds on 16k rows, serves in pure Python (no torch at runtime). Cosine alone ignores CPV/region/value fit — the LR *learned* that CPV-4 and NUTS-exact matter as much as semantic similarity.
 
 **Q: How is the model evaluated? Isn't 54% low?**
-- **Chronological (leakage-safe) split** — train on the earlier 80% of awards, test on the later 20% (500 held-out); metric is Hit@k (did the true winner land in the top-k of its tender's ranked pool). **Hit@1 44.2 / Hit@3 54.0 / Hit@5 57.6%** ([model_report.json](exports/model_report.json)). Against a pool of thousands of candidate suppliers, ranking the actual winner top-3 more than half the time is strong — and it's an *honest* number (5:1 hard negatives, no test leakage).
+- **Chronological (leakage-safe) split** — train on the earlier 80% of awards, test on the later 20% (500 held-out); metric is Hit@k (did the true winner land in the top-k of its tender's ranked pool). **Hit@1 44.2 / Hit@3 54.0 / Hit@5 57.6%** ([model_report.json](archive/data-exports/model_report.json)). Against a pool of thousands of candidate suppliers, ranking the actual winner top-3 more than half the time is strong — and it's an *honest* number (5:1 hard negatives, no test leakage).
 
 **Q: Where do the emails come from — are they hallucinated?**
 - No. `EvidenceExtractor` builds a **factual evidence dict** (tender fields, company profile, real scores, dossier snippets); the Claude drafter is instructed to use **only** facts in that dict and is checked by `EmailValidator`; on any failure it falls back to a deterministic template ([drafter.py](backend/app/generation/drafter.py), [evidence.py](backend/app/generation/evidence.py)). Two-sided: supplier outreach + buyer digest.
@@ -324,7 +324,7 @@ The email drafter, tender extractor, and reflection narrator each get a short ta
 - `company_profiles.embedding` is `Vector(384)` (the hot MiniLM path); the generic `embeddings` table is `Vector(768)` (reserved for cross-model storage). Only 384 is in the live matching path.
 
 **Q: Is it production-ready / what are the known gaps?**
-- MVP for a course. Known, documented gaps: fixed supplier pool (only past award winners, G14); no supplier-cert data → cert gate inert in prod; no auth/multi-tenant (G21); PDF-portal scraping out of scope (most portals return HTML). All tracked in `docs/integration_gap_tracker.md`.
+- MVP for a course. Known, documented gaps: fixed supplier pool (only past award winners, G14); no supplier-cert data → cert gate inert in prod; no auth/multi-tenant (G21); PDF-portal scraping out of scope (most portals return HTML). All tracked in `archive/internal-logs/integration_gap_tracker.md`.
 
 **Q: How is it tested / CI?**
 - **346 backend tests**, CI on GitHub Actions (Postgres service + Alembic upgrade check + frontend lint/build). Tests stay **ML-dep-free** — matching/agent tests inject fakes or lazy-import; the one test that fits a real sklearn model is `importorskip`-guarded.
@@ -391,4 +391,4 @@ Migrations `0001`→`0015` in [backend/app/db/migrations/versions/](backend/app/
 
 ---
 
-*Generated 2026-07-11 from the live codebase + running DB. Cross-references: `CLAUDE.md` (internal context), `docs/integration_gap_tracker.md` (gaps), `docs/matching_pipeline_smoke_record.md` (live smokes).*
+*Generated 2026-07-11 from the live codebase + running DB. Cross-references: `archive/internal-logs/integration_gap_tracker.md` (gaps), `archive/internal-logs/matching_pipeline_smoke_record.md` (live smokes).*

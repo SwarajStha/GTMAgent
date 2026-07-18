@@ -36,3 +36,10 @@ storage/
 
 # Claude internal context (not for the team)
 CLAUDE.md
+
+# Third-party course material — kept locally, never committed
+GenAI_Lecture01_Intro.pdf
+GenAI_CourseProject_GradingCriteria.pdf
+
+# Presentations — kept locally, delivered separately (not in the code repo)
+*.pptx

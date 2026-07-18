@@ -47,9 +47,13 @@ Evaluated on 500 held-out tenders (honest evaluation — no pre-filtering, winne
 
 ## Data
 
-- `exports/awards_training.csv` — 21,015 historical EU procurement awards
-- 50% used for training (chronological split), 50% for testing
-- Hard negatives: 5 negatives per positive, sampled from same country + CPV + value band
+- `archive/data-exports/awards_training.csv` — 21,015 historical EU procurement awards
+- Chronological train/test split (leakage-safe); hard negatives: 5 per positive,
+  sampled from the same country + CPV + value band
+
+> The bulky training inputs live under `archive/data-exports/` (see
+> `archive/README.md`); only `exports/model_params.json` — the artifact the
+> running app loads — stays in `exports/`.
 
 ## Run
 
@@ -58,9 +62,11 @@ py -3 run_pipeline.py
 ```
 
 Outputs:
-- `exports/top3_results.json` — per-tender predictions
-- `exports/model_report.json` — metrics and LR coefficients
-- `exports/company_matcher.joblib` — saved model + scaler
+- `exports/model_params.json` — **the runtime artifact** the app's matcher loads
+  (LR coefficients + intercept + scaler)
+- `archive/data-exports/top3_results.json` — per-tender predictions
+- `archive/data-exports/model_report.json` — metrics and LR coefficients
+- `archive/data-exports/company_matcher.joblib` — saved model + scaler
 
 ## Known Limitations
 

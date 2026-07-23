@@ -6,6 +6,36 @@ For the decision log see [docs/architecture.md](docs/architecture.md); for the s
 
 ---
 
+## Evaluating this project? Start here
+
+Fastest path from a fresh clone to a **populated, running app**. Docker is the only
+prerequisite — no host Python needed:
+
+```sh
+cp backend/.env.example backend/.env                    # optional: add ANTHROPIC_API_KEY
+docker compose up -d db                                 # 1. Postgres + pgvector
+docker compose run --rm backend alembic upgrade head    # 2. create the schema
+./scripts/seed/load_seed.sh                             # 3. load ~2 MB of real demo data
+docker compose up -d --build                            # 4. backend + frontend
+```
+
+On Windows PowerShell, step 3 is `powershell -File scripts\seed\load_seed.ps1`.
+
+Then open **http://localhost:5173** — Tenders, Matches, Companies, Awards, Emails and
+saved agent analyses are all populated with real (public) EU procurement data.
+Interactive API docs: **http://localhost:8000/docs**.
+
+**No API key is needed to look around.** The seeded emails and agent reports are
+pre-generated and the matching pipeline is deterministic, so every screen renders
+without one. Only *new* LLM output — running the agent, drafting a fresh email,
+extracting a tender profile — needs `ANTHROPIC_API_KEY` in `backend/.env`.
+
+Details on the seed (what's in it, how to regenerate): [scripts/seed/README.md](scripts/seed/README.md).
+Full setup options — local dev loop, ingestion CLI, matching walkthrough — are under
+[Quick start](#quick-start) below.
+
+---
+
 ## Current status
 
 | Phase | What | Status |
@@ -324,6 +354,12 @@ GitHub Actions runs three jobs on every push and PR to `main`:
 1. **backend-test** — Python 3.11, install dev deps, spin up a Postgres service + create `gtm_test`, `pytest tests` (276 tests; the matching/agent tests inject fakes so the run stays torch-free)
 2. **frontend-lint** — Node 20, `npm ci`, `npm run lint`, `npm run build`
 3. **migration-check** — Spins up a real `pgvector/pgvector:pg16` service, runs `alembic upgrade head` (0001 → 0015)
+
+> **Note:** these jobs run on the GitHub remote where the project was developed. The
+> workflow file (`.github/workflows/ci.yml`) ships with the repo for reference, but a
+> GitLab copy will **not** execute it — there is no `.gitlab-ci.yml`. To run the same
+> checks locally: `pytest tests -v` in `backend/`, and `npm run lint && npm run build`
+> in `frontend/`.
 
 ---
 

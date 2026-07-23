@@ -43,3 +43,10 @@ GenAI_CourseProject_GradingCriteria.pdf
 
 # Presentations — kept locally, delivered separately (not in the code repo)
 *.pptx
+
+# Word documents — the reports/proposal are submitted separately (Moodle);
+# their Markdown sources stay in the repo. Kept locally, not committed.
+*.docx
+
+# Pitch video — large media, submitted separately as a report attachment
+Pitch Video/

@@ -1,3 +1,21 @@
+"""End-to-end smoke test for the Claude tool-use agent (`AgentController`).
+
+Drives one full agent run against the real Anthropic API and prints the tool
+dispatches it chose plus its final answer. Use it to confirm your
+`ANTHROPIC_API_KEY` works, that the tool schemas still satisfy Anthropic's strict
+tool-use validation, and to see how a plain-English goal maps to tool calls.
+
+Safety: the agent defaults to `dry_run=True`, which means **no network** for the
+caged ingest tools (`ingest_tenders` / `ingest_awards`) — they report what they
+*would* do. Pass `--live` only when you actually want real TED polls + DB writes.
+
+Usage (from the repo root, venv active):
+    python backend/scripts/agent_smoke.py
+    python backend/scripts/agent_smoke.py --goal "Find IT services tenders in Germany"
+    python backend/scripts/agent_smoke.py --live --quiet
+
+See backend/scripts/README.md (agent_smoke.py section) for flag details.
+"""
 import argparse
 import logging
 import os
@@ -17,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="Smoke test for the ReAct Agent Controller.")
     parser.add_argument("--goal", type=str, default="Find me a recent German tender for road construction and draft a summary.",
                         help="The goal/prompt to feed to the agent")
-    parser.add_argument("--live", action="store_true", help="Allow write-capable tools (ingest_*, download_dossiers) to hit the live API and write to the DB. By default the agent runs in dry-run/read-only mode.")
+    parser.add_argument("--live", action="store_true", help="Allow the caged ingest tools (ingest_tenders/ingest_awards) to reach the live TED API and write to the DB. By default the agent runs dry-run, which performs no network calls at all.")
     parser.add_argument("--quiet", action="store_true", help="Suppress detailed execution logs")
     args = parser.parse_args()
 
@@ -37,7 +55,7 @@ def main():
     logger.info(f"Target Goal: '{args.goal}'")
     logger.info(f"Live mode: {args.live} (write-capable tools dry_run={dry_run})")
     if not dry_run:
-        logger.warning("Live mode enabled — ingest_tenders/ingest_awards/download_dossiers may hit the live TED API and write to the DB.")
+        logger.warning("Live mode enabled — ingest_tenders/ingest_awards may hit the live TED API and write to the DB.")
 
     try:
         logger.info("Dispatching agent. This will call the Anthropic API...")

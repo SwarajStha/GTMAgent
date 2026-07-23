@@ -1,12 +1,12 @@
 # Tender → Company Matching Pipeline
 
-Given a new EU procurement tender, ranks the top 3 most suitable companies from a fixed catalog of 14,066 companies.
+Given a new EU procurement tender, ranks the top 3 most suitable companies from a fixed pool of past award winners (~15k companies in the source dataset).
 
 ## How It Works
 
 **Two-stage pipeline:**
 
-1. **Hard Filter** — narrows 14,066 companies down to ≤200 candidates using CPV code, buyer country, and contract value. Progressively relaxes criteria (CPV-4 + country + value → CPV-2 + country → CPV-2 only → country only → all companies).
+1. **Hard Filter** — narrows the full company pool down to ≤200 candidates using CPV code, buyer country, and contract value. Progressively relaxes criteria (CPV-4 + country + value → CPV-2 + country → CPV-2 only → country only → all companies).
 
 2. **Logistic Regression Ranker** — scores each candidate on 10 features and ranks by predicted win probability.
 
@@ -33,23 +33,24 @@ Each company profile is built from its full award history:
 
 ## Results
 
-Evaluated on 500 held-out tenders (honest evaluation — no pre-filtering, winner not forced into candidate pool):
+Evaluated on 500 held-out tenders (honest evaluation — no pre-filtering, winner not forced into the candidate pool). Figures below are the committed model's, from [`archive/data-exports/model_report.json`](archive/data-exports/model_report.json) (generated 2026-07-05):
 
 | Metric | Value |
 |---|---|
-| Hit@1 | 45.4% |
-| Hit@3 | 54.8% |
-| Hit@5 | 59.2% |
-| Winner filtered out by Stage 1 | 26.2% (131/500) |
+| Hit@1 | 44.2% (221/500) |
+| Hit@3 | 54.0% (270/500) |
+| Hit@5 | 57.6% (288/500) |
+| Winner filtered out by Stage 1 | 26.6% (133/500) |
 | Winner unresolvable | 0% |
 
-**Note:** 26% of tenders have their true winner removed by the hard filter before LR ever runs. Among tenders where the winner survives Stage 1, Hit@3 is ~74%.
+**Note:** ~27% of tenders have their true winner removed by the hard filter before LR ever runs. Among tenders where the winner survives Stage 1, Hit@3 is ~74% (270/367).
 
 ## Data
 
 - `archive/data-exports/awards_training.csv` — 21,015 historical EU procurement awards
-- Chronological train/test split (leakage-safe); hard negatives: 5 per positive,
-  sampled from the same country + CPV + value band
+- Chronological (leakage-safe) split: trained on the earlier **80%** (16,812 awards),
+  evaluated on 500 held-out later tenders
+- Hard negatives: 5 per positive, sampled from the same country + CPV + value band
 
 > The bulky training inputs live under `archive/data-exports/` (see
 > `archive/README.md`); only `exports/model_params.json` — the artifact the
@@ -58,7 +59,7 @@ Evaluated on 500 held-out tenders (honest evaluation — no pre-filtering, winne
 ## Run
 
 ```
-py -3 run_pipeline.py
+py -3.11 run_pipeline.py        # needs backend/requirements-ml.txt installed
 ```
 
 Outputs:
@@ -72,4 +73,4 @@ Outputs:
 
 1. **Hard filter miss rate (26%)** — winners whose CPV/country combination has no historical match get filtered before LR can rank them
 2. **Structured feature leakage** — company profiles include all historical awards; for training pairs, the current tender's CPV/NUTS/country contribution is not excluded from structured features
-3. **Fixed company pool** — pipeline assumes all possible winners are already in the 14,066-company catalog
+3. **Fixed company pool** — pipeline assumes all possible winners are already in the company catalog built from historical awards

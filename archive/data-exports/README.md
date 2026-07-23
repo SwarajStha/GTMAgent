@@ -1,5 +1,11 @@
 # GTM Awards Dataset — for ML matching
 
+> **Archived.** These are the training inputs + byproducts of the matcher — not
+> needed to run the app. The runtime artifact the app loads is
+> [`exports/model_params.json`](../../exports/model_params.json); the trainer that
+> consumes the files here is documented in
+> [README_ML_PIPELINE.md](../../README_ML_PIPELINE.md).
+
 Export of EU TED **Contract Award Notices (CANs)** and the canonical companies
 that won them. This is the historical "who-won-what" signal for training the
 tender↔company matching model.

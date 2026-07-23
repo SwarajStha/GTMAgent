@@ -357,7 +357,7 @@ Both tables together so the FK doesn't trip. `tenders` is untouched.
 docker compose down -v          # wipes the pgdata volume
 docker compose up -d db
 cd backend
-alembic upgrade head            # rebuild schema at current head (0008)
+alembic upgrade head            # rebuild schema at current head (0015)
 ```
 
 Use when migrations get tangled (e.g. after switching branches with a different migration head).
@@ -421,11 +421,11 @@ python backend\scripts\agent_smoke.py --quiet
 | Flag | Default | Effect |
 |---|---|---|
 | `--goal "... text ..."` | default test objective | The instruction provided to the Agent. |
-| `--live` | off | **Allows write-capable tools to run for real.** Without this flag (the default), `AgentController(dry_run=True)` makes `ingest_tenders` / `ingest_awards` / `download_dossiers` validate inputs and report what *would* happen without hitting the live TED API or writing to the DB — same `dry_run=` plumbing as `ted_smoke.py`/`awards_smoke.py`. Pass `--live` to flip `dry_run=False` and allow real TED polls / dossier downloads / DB writes as a side effect of whatever plan the model comes up with. |
+| `--live` | off | **Allows the caged ingest tools to reach the network for real.** Without this flag (the default), `AgentController(dry_run=True)` makes `ingest_tenders` / `ingest_awards` report what they *would* do — dry-run means **no network at all**, not merely no DB writes. Pass `--live` to flip `dry_run=False` and allow real TED polls / DB writes as a side effect of whatever plan the model comes up with; even then, live ingests stay bounded and run at most once per agent run. |
 | `--quiet` | off | Suppress Python logging, outputting only the Agent's final text payload. |
 
 **Safety note**: a chat-style goal like "find me a recent German tender" can
-cause the model to *plan* a live ingestion or download as a side effect.
+cause the model to *plan* a live ingestion as a side effect.
 `dry_run=True` (the default for both this script and the `/api/v1/agent/run`
 endpoint) is what keeps that safe to experiment with — only pass `--live`
 when you actually want the agent to write to the DB / hit the TED API.

@@ -23,7 +23,13 @@ On Windows PowerShell, step 3 is `powershell -File scripts\seed\load_seed.ps1`.
 
 Then open **http://localhost:5173** — Tenders, Matches, Companies, Awards, Emails and
 saved agent analyses are all populated with real (public) EU procurement data.
-Interactive API docs: **http://localhost:8000/docs**.
+
+| What | Where |
+|---|---|
+| Frontend | http://localhost:5173 |
+| Interactive API docs | http://localhost:8000/docs |
+| Health probe | http://localhost:8000/health |
+| Postgres | `localhost:5432` direct, or `localhost:6543` pooled alias — same DB; user/password/db all `gtm` |
 
 **No API key is needed to look around.** The seeded emails and agent reports are
 pre-generated and the matching pipeline is deterministic, so every screen renders
@@ -31,8 +37,7 @@ without one. Only *new* LLM output — running the agent, drafting a fresh email
 extracting a tender profile — needs `ANTHROPIC_API_KEY` in `backend/.env`.
 
 Details on the seed (what's in it, how to regenerate): [scripts/seed/README.md](scripts/seed/README.md).
-Full setup options — local dev loop, ingestion CLI, matching walkthrough — are under
-[Quick start](#quick-start) below.
+Working on the code instead? See [Development setup](#development-setup).
 
 ---
 
@@ -52,7 +57,7 @@ Full setup options — local dev loop, ingestion CLI, matching walkthrough — a
 | 6 | Agent (Claude tool-use orchestrator + reflection loop) | **Done — DB-first, streaming (SSE) + resumable, 8 tools** |
 | — | REST API (tenders/awards/companies/matches/emails/feedback/agent) | **Done — all 7 routers implemented** |
 | — | Frontend (7 views wired to the API) | **Done — with sample-data fallback** |
-| — | ML training dataset export (`exports/`) | **Done — for the lead-scoring model** |
+| — | ML training dataset export (`archive/data-exports/`) | **Done — trained the v5 matcher** |
 
 The one remaining gap is **auth / multi-tenancy** (deferred to a later phase — the LLM/ops endpoints are currently unauthenticated). The supplier capability profiles are still thin in the MVP — see [archive/internal-logs/matching_pipeline_smoke_record.md](archive/internal-logs/matching_pipeline_smoke_record.md) for the known scoring limitations.
 
@@ -60,14 +65,16 @@ The one remaining gap is **auth / multi-tenancy** (deferred to a later phase —
 
 ## Prerequisites
 
-Before running anything, you need these installed and working:
+**To run and evaluate the project, Docker Desktop is the only requirement** — the
+commands above run Postgres, the backend and the frontend in containers. Python and
+Node matter only if you want to develop against it ([Development setup](#development-setup)).
 
-| Tool | Minimum version | Why |
+| Tool | Minimum version | Needed for |
 |---|---|---|
-| **Docker Desktop** | 24.x | Runs Postgres 16 + pgvector in a container; the app talks to it on `localhost:5432`. |
-| **Python** | **3.11 exactly** (NOT 3.12+) | Pinned dependencies (pgvector, psycopg, sentence-transformers ecosystem) target 3.11. |
-| **Node.js** | 20.x LTS | Frontend dev server + build. |
-| **Git** | any recent | Cloning + branching. |
+| **Docker Desktop** | 24.x | **Everything — the only tool required to run the app.** Postgres 16 + pgvector, backend, frontend. |
+| **Git** | any recent | Cloning the repo. |
+| **Python** | **3.11 exactly** (NOT 3.12+) | *Development only.* Pinned deps (pgvector, psycopg, sentence-transformers ecosystem) target 3.11. |
+| **Node.js** | 20.x LTS | *Development only.* Frontend dev server + build. |
 
 ### How to check each one
 
@@ -91,7 +98,7 @@ If `py -3.11` errors on Windows, install Python 3.11 from python.org and re-open
 
 | Tool | Why |
 |---|---|
-| **DBeaver** or **pgAdmin** | GUI for browsing the Postgres data (especially `tenders.raw_json`). Connect to `localhost:5432`, db `gtm`, user `gtm`, password `gtm`. |
+| **DBeaver** or **pgAdmin** | GUI for browsing the Postgres data — connection details under [Database access](#database-access). |
 | **VS Code** with Python + Vue extensions | The repo's structure assumes a multi-folder workspace. |
 
 ### Windows-specific gotchas
@@ -132,7 +139,7 @@ GTMAgent/
 │   ├── app/
 │   │   ├── api/v1/           FastAPI routers — tenders, awards, companies,
 │   │   │                       matches, emails, feedback, agent (all implemented)
-│   │   ├── core/             config.py (pydantic-settings), logging.py
+│   │   ├── core/             config.py (pydantic-settings), logging.py, rate_limit.py
 │   │   ├── db/               models.py (13 tables), session.py, migrations/ (0001–0015)
 │   │   ├── ingestion/        ted_client, awards_client, dossier_downloader,
 │   │   │                       entity_resolution, base_client, schemas, __main__ (CLI),
@@ -142,55 +149,50 @@ GTMAgent/
 │   │   │                       embedder, semantic, rules, features, lr_weights, money
 │   │   ├── generation/       evidence, drafter (Claude), validator
 │   │   └── agent/            controller (streaming, resumable), tools (8), reflector, progress
-│   ├── scripts/              ted_smoke, awards_smoke, agent_smoke — see scripts/README.md
+│   ├── scripts/              ted_smoke, awards_smoke, agent_smoke, test_anthropic_schema,
+│   │                           create_readonly_role.sql — see backend/scripts/README.md
 │   ├── tests/                pytest suite (276 tests across 34 files)
 │   ├── alembic.ini           script_location = app/db/migrations
 │   ├── requirements.txt      lean runtime deps (no torch)
 │   ├── requirements-ml.txt   sentence-transformers + scikit-learn + joblib
 │   ├── requirements-dev.txt  -r requirements.txt + pytest + ruff
-│   ├── .env.example          template
+│   ├── .env.example          copy to backend/.env and fill in
 │   └── Dockerfile
 ├── frontend/
-│   └── src/                  Vue views (7: Home/Tenders/Matches/Emails/Awards/
-│                               Companies/Agent), Pinia stores, router
-├── exports/                  model_params.json — the runtime LR matcher artifact (+ README)
+│   ├── src/                  7 Vue views (Home/Tenders/Matches/Emails/Awards/
+│   │                           Companies/Agent), Pinia stores, router
+│   ├── package.json          + vite.config.ts, tailwind.config.ts, eslint.config.js
+│   └── Dockerfile
 ├── scripts/
 │   ├── init-pgvector.sql     CREATE EXTENSION IF NOT EXISTS vector (runs on first DB init)
-│   └── seed/                 curated demo seed + loader (see scripts/seed/README.md)
+│   └── seed/                 demo seed — seed_demo.sql, .sh/.ps1 loaders, generator
+│                               (see scripts/seed/README.md)
+├── exports/                  model_params.json — the runtime LR matcher artifact (+ README)
 ├── docs/                     architecture, system_architecture, Database_Explanation,
-│                               agentic_behavior_description
-├── archive/                  provenance only — training data, planning docs, internal
-│                               logs, samples (not needed to run; see archive/README.md)
-├── Reports/                  graded course deliverables (User Guide, PM, UAT, Safety)
-├── exports_ml_pipeline.py    v5 matcher trainer (+ run_pipeline.py, README_ML_PIPELINE.md)
+│                               agentic_behavior_description, Specifications
+├── Reports/                  graded deliverables as Markdown (Project Management, User
+│                               Guide, UAT, GenAI Safety) + Screenshots/
+├── archive/                  provenance only, not needed to run — data-exports/ (ML
+│                               training data), planning/, internal-logs/, data-samples/
+│                               (see archive/README.md)
+├── exports_ml_pipeline.py    v5 matcher trainer — regenerates exports/model_params.json
+├── run_pipeline.py           trainer entry point
+├── README_ML_PIPELINE.md     how the matcher was trained + evaluated
 ├── docker-compose.yml        db + backend + frontend
-├── .github/workflows/ci.yml  3 CI jobs
+├── .github/workflows/ci.yml  3 CI jobs (GitHub only — see the CI note below)
+├── .gitignore                excludes secrets, *.docx/*.pptx, Pitch Video/, caches
 ├── Guide.md                  teammate onboarding guide
 └── README.md                 (this file)
 ```
 
 ---
 
-## Quick start
+## Development setup
 
-### 1. Fastest path — everything in Docker
+> Only want to *run* it? Use [Evaluating this project? Start here](#evaluating-this-project-start-here)
+> above — Docker-only, no host toolchain. This section is for working on the code.
 
-```sh
-cp backend/.env.example backend/.env   # then edit, set ANTHROPIC_API_KEY
-docker compose up --build
-```
-
-Once it's up:
-- API health: http://localhost:8000/health
-- Frontend: http://localhost:5173
-- Postgres: `localhost:5432` (direct) or `localhost:6543` (pooled alias) — same DB, two ports
-
-> The backend image does **not** auto-migrate, so the database starts empty. Create
-> the schema — `docker compose run --rm backend alembic upgrade head` (no host Python
-> needed) — then **load the demo seed (step 3)** to see the UI populated. Until then
-> the API is live but the tables don't exist yet.
-
-### 2. Local dev loop (recommended once you're iterating)
+### 1. Local dev loop (host backend + frontend, hot reload)
 
 Run the DB in Docker, run backend + frontend on the host with hot reload.
 
@@ -236,25 +238,7 @@ npm ci          # use ci, not install — respects the committed lockfile
 npm run dev
 ```
 
-### 3. See it populated — load the demo seed
-
-`docker compose up` starts with an **empty** database. To browse real content
-without running a live TED ingestion, load the bundled ~2 MB demo seed once the
-schema exists (after `alembic upgrade head` from step 2 — or, with no host venv,
-`docker compose run --rm backend alembic upgrade head`):
-
-```sh
-./scripts/seed/load_seed.sh                     # macOS / Linux / Git Bash
-powershell -File scripts\seed\load_seed.ps1     # Windows PowerShell
-```
-
-It loads a curated, referentially-consistent slice (the 13 tenders that have
-matches + their matches, companies, awards, emails, and saved reports). Details
-and what's included: [scripts/seed/README.md](scripts/seed/README.md). The seeded
-emails/reports are pre-generated so they display without an `ANTHROPIC_API_KEY`;
-live LLM features (the agent, new drafts) still need one.
-
-### 4. Run the ingestion pipeline (CLI)
+### 2. Run the ingestion pipeline (CLI)
 
 All three ingestion jobs are exposed through one CLI (`backend/app/ingestion/__main__.py`). From inside `backend/` with the venv active:
 
@@ -274,7 +258,7 @@ python backend\scripts\awards_smoke.py --live   # writes awards + resolves compa
 python backend\scripts\agent_smoke.py           # exercises the Claude agent loop (dry-run default)
 ```
 
-### 5. Run matching + generation
+### 3. Run matching + generation
 
 Once tenders, awards, and companies exist, build the supplier pool and rank it for a tender. This needs the ML deps (`requirements-ml.txt`):
 
@@ -372,6 +356,18 @@ GitHub Actions runs three jobs on every push and PR to `main`:
 
 ---
 
-## Help / issues
+## Documentation map
 
-See [docs/architecture.md](docs/architecture.md) for high-level decisions and [backend/scripts/README.md](backend/scripts/README.md) for ingestion smoke-test usage.
+| Document | What it covers |
+|---|---|
+| [Guide.md](Guide.md) | Teammate onboarding — end-to-end walkthrough of the system + local setup |
+| [docs/architecture.md](docs/architecture.md) | ADR-style decision log — why the system is shaped this way |
+| [docs/system_architecture.md](docs/system_architecture.md) | Current architecture in swim-lane form (frontend / backend / DB / external) |
+| [docs/Database_Explanation.md](docs/Database_Explanation.md) | Table-by-table schema reference |
+| [docs/agentic_behavior_description.md](docs/agentic_behavior_description.md) | How the agent plans, calls tools, and stays grounded |
+| [docs/Specifications.md](docs/Specifications.md) | Technical Q&A on the design and implementation |
+| [README_ML_PIPELINE.md](README_ML_PIPELINE.md) | How the v5 matcher was trained and evaluated |
+| [scripts/seed/README.md](scripts/seed/README.md) | The demo seed — contents, loading, regeneration |
+| [backend/scripts/README.md](backend/scripts/README.md) | Smoke harnesses, test-DB setup, DB cheatsheet |
+| [Reports/](Reports/) | Graded course deliverables (Project Management, User Guide, UAT, GenAI Safety) |
+| [archive/README.md](archive/README.md) | Provenance material kept for reference, not needed to run |

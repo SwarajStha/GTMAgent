@@ -11,6 +11,27 @@ Project 4 — **GTM Agent**
 > **`[TEAM DECISION]`** require an explicit team call before submission. Remove all
 > such callouts (and this status block) before the final version.
 
+> **── Sync update 2026-07-23: aligned to the current codebase (post-G20/G23/G25/G27) ──**
+> This report previously reflected the 2026-07-01 state. The items below were edited
+> to match the code as of the 2026-07-05 sprint. **Peers: review each item, then
+> delete this whole block before submission.**
+> - **§1.3 & §7 (Evaluation)** — real, reproducible backtest numbers now exist
+>   (model retrained on 80% of awards, 2026-07-05): **Hit@1 44.2% · Hit@3 54.0% ·
+>   Hit@5 57.6%** (500 held-out awards, winner-in-pool). Filled in; several
+>   `[NEEDS INPUT]` numbers are now resolved. *Still open for the team:* a Top-10
+>   figure (current backtest reports up to Hit@5) and MRR, if you want them — extend
+>   `exports_ml_pipeline.py` eval to Hit@10.
+> - **§6.1** — added the runtime scheduler toggle + ops-command console (G27);
+>   progress-snapshot date moved to 2026-07-05.
+> - **§4.4 / §5** — test count ~227 → ~346; migrations `0001`→`0015`; scheduler is
+>   no longer a stub; dropped the deleted standalone lead-scoring demo (G25);
+>   added the train/serve feature-contract drift guard (G20).
+> - **§3.2** — the Understanding layer is described as **shipped** (it was still
+>   labelled a "stub", contradicting §6.1 which lists it Done via G11).
+> - **§3.3** — table count corrected (thirteen).
+> *Deliberately left for the team (unchanged):* §2.2 calendar dates, §9 team chart,
+> §10 pitch-video link, and the citation-style normalisation in §12.
+
 ---
 
 ## Abstract
@@ -86,10 +107,13 @@ budget band, recovering bidder signal that is otherwise unavailable for free.
 The matcher is evaluated by *backtesting*: reconstructing the world as of a past
 tender's publication date, running the matcher, and recording where the actual
 winner ranks. Target hit-rates across phases were Top-10 ≥ 50% (MVP) → ≥ 65%
-(post-mid-term) → ≥ 75% (final). The reference v5 model reports an honest
-**Hit@3 ≈ 55%** on held-out award data. `[NEEDS INPUT: confirm the final
-backtest numbers (Top-1 / Top-5 / Top-10 / MRR) actually achieved, for the
-evaluation table in §7.]`
+(post-mid-term) → ≥ 75% (final). The final trained model (retrained 2026-07-05 on
+80% of the award history, 16,812 awards) reports honest hit-rates on a 500-award
+held-out backtest of **Hit@1 44.2% · Hit@3 54.0% · Hit@5 57.6%** (winner-in-pool),
+so the Top-1 (≥ 25%) and Top-5 (≥ 55%) targets are met while the aspirational
+Top-10 ≥ 75% is not separately measured — the current backtest reports up to Hit@5.
+Full numbers are in §7. `[NEEDS INPUT: if a Top-10 / MRR figure is wanted for the
+table, extend the backtest eval and paste it here.]`
 
 ---
 
@@ -198,11 +222,14 @@ logical sub-systems.
    `companies` table, with a `clean_identifier()` guard against junk IDs that
    would otherwise false-merge distinct firms.
 
-3. **Understanding** (`app/understanding/`, **stub**). The intended layer is a
-   Claude `FieldExtractor` that turns a notice + dossier into a strict structured
-   `TenderProfile`. Today the matcher reads tender columns and dossier text
-   directly. `[NEEDS INPUT: confirm whether the understanding layer will be wired
-   before submission, or documented as future work.]`
+3. **Understanding** (`app/understanding/`). A Claude `FieldExtractor` + validator
+   turns a notice + dossier into a strict structured `TenderProfile`, persisted to
+   `tenders.tender_profile` (JSONB). It is an explicit opt-in step
+   (`POST /tenders/{id}/extract` or the agent's `extract_tender_profile` tool) rather
+   than something run inside every match, keeping the matcher cheap and deterministic.
+   The trusted TED columns are treated as authoritative; the LLM only enriches the
+   soft fields (summary, required certifications/capabilities, keywords, language),
+   and the extracted certifications feed the matcher's certification-disqualifier gate.
 
 4. **Matching** (`app/matching/`). A two-layer pipeline. *Layer 1*
    (`profile_builder`) derives a `company_profiles` row (capability text +
@@ -234,7 +261,7 @@ logical sub-systems.
 
 ### 3.3 Data model (selected)
 
-Fourteen tables in a single PostgreSQL schema. The hot path uses pgvector: a
+Thirteen tables in a single PostgreSQL schema. The hot path uses pgvector: a
 384-dimensional embedding column on `company_profiles` for fast cosine
 similarity, with a generic 768-dimensional `embeddings` table reserved for
 cross-model storage. Award winners (`companies`) and capability profiles
@@ -265,6 +292,12 @@ that the earlier version failed:
 The run streams live progress to the UI as Server-Sent Events, and the result offers
 two one-click actions: **Save results** (persists the analysis to `tender_reports`)
 and **Draft email** to any of the top-3 matches.
+
+Alongside the agent, the same screen carries an **ops command console** for operators:
+`/retrain` (feedback→LR retrain), `/reflect` (run a reflection cycle), and
+`/schedule on|off|status` (toggle the in-process ingestion/reflection scheduler at
+runtime, without a restart). These are single-user operator conveniences today;
+gating them behind authentication is deferred to the (unstarted) auth phase.
 
 ---
 
@@ -346,10 +379,13 @@ GenAI is used in three places, each with a deliberate prompting strategy:
 ### 4.4 Engineering process
 
 Trunk-based development on `main` with feature branches and PR review; GitHub
-Actions CI runs the backend test suite (~227 tests, kept torch-free via injected
+Actions CI runs the backend test suite (~346 tests, kept torch-free via injected
 fake embedders), frontend lint+build, and an Alembic migration smoke against a
 real pgvector container. Schema changes ship as additive Alembic migrations
-(`0001`→`0010`). A recurring **find-a-gap → fix → verify** loop (documented in
+(`0001`→`0015`). A train/serve **feature-contract drift guard** keeps the offline
+model trainer and the live matcher's feature math in lock-step (a CI-safe test
+pins the served feature vector to the committed model parameters). A recurring
+**find-a-gap → fix → verify** loop (documented in
 `archive/internal-logs/Notes.md` and `archive/internal-logs/integration_gap_tracker.md`) drove iterative quality:
 e.g. discovering via live smoke that `qualification` scored 0 for every match,
 then fixing it with CPV-prefix partial credit and re-verifying that 89/100 top
@@ -369,9 +405,9 @@ matches then scored > 0.
 | HTTP client | httpx (+ truststore) | `requests` banned by spec |
 | PDF text | PyMuPDF | Dossier extraction |
 | Embeddings | sentence-transformers — `paraphrase-multilingual-MiniLM-L12-v2` (384-d), CPU-only | Multilingual MiniLM; lazy-loaded |
-| Classical ML | scikit-learn + joblib | Logistic-regression matcher + lead scoring |
+| Classical ML | scikit-learn + joblib | Trained logistic-regression matcher (calibrated win-probability) |
 | LLM | Anthropic Claude (`claude-sonnet-4-6`) | Agent, reflection, email drafting |
-| Scheduler | APScheduler (in-process) | Stub — CLI used for now |
+| Scheduler | APScheduler (in-process) | Opt-in cron loop (ingest + reflect); runtime on/off/status toggle |
 | Frontend | Vue 3 / TypeScript / Vite 5 / Pinia / Tailwind | Three-column dashboard |
 | CI | GitHub Actions | pytest · lint+build · migration smoke |
 | Containerisation | Docker Compose | db + backend + frontend |
@@ -384,7 +420,7 @@ torch-free.
 
 ## 6. Current Progress and Future Plans
 
-### 6.1 Current progress (as of 2026-07-01)
+### 6.1 Current progress (as of 2026-07-05)
 
 | Component | Status |
 |---|---|
@@ -396,10 +432,11 @@ torch-free.
 | Matching (hybrid + trained LR mode) | **Done — live-smoked; unified v5 model serving** |
 | Two-sided email generation (Claude) | **Done — evidence-grounded, live-verified** |
 | Feedback capture + LR retraining | **Done** |
-| Scheduler (APScheduler, opt-in) + reflection loop | **Done (G13/G9)** |
+| Scheduler (APScheduler, opt-in) + reflection loop | **Done (G13/G9); runtime on/off/status toggle (G27)** |
 | Agent (DB-first, streaming, resumable; result actions) | **Done — reworked G22/G28, live-smoked** |
+| Ops command console (`/retrain`, `/reflect`, `/schedule`, `/help`) | **Done (G27)** |
 | REST API (7 routers) + Vue dashboard (7 views) | **Done — with sample-data fallback** |
-| ML training dataset export | **Done** |
+| ML training dataset export + retrain on 80% of awards | **Done (G23) — 16,812 training awards** |
 
 The headline integration achievement was unifying two matchers — a simple
 fixed-weight one in the app and a stronger but disconnected trained "v5" logistic
@@ -417,12 +454,15 @@ by Claude.
 - **Auth / multi-tenancy** — Phase 5, not started.
 - **Verified outreach contacts** — TED carries no supplier email, so supplier
   recipients are website-derived and flagged *unverified* rather than fabricated.
-- **Backtest KPI numbers** — to be finalised from a fresh run (§7).
+- **Backtest KPI numbers** — finalised from the 2026-07-05 retrain (§7); a Top-10
+  / MRR figure would require extending the eval past Hit@5.
 
 > *Resolved since the 2026-06-21 draft:* the APScheduler loop (G13), the Understanding
 > layer + cert gate (G11/G12), reflection→behaviour wiring (G9), the awards/companies/
-> agent UI + persisted weights (G15/G16), and the agent rework + result actions
-> (G22/G28) all shipped — see `archive/internal-logs/integration_gap_tracker.md`.
+> agent UI + persisted weights (G15/G16), the agent rework + result actions (G22/G28),
+> the ops command console + runtime scheduler toggle (G27), the train/serve drift guard
+> (G20), and the 80%-data model retrain (G23) all shipped — see
+> `archive/internal-logs/integration_gap_tracker.md`.
 - **Future-work candidates** (catalogued, not committed): Vision-LLM blueprint
   parsing; Neo4j incumbency knowledge graph; embedding ensemble (adding
   `all-mpnet-base-v2` and `multilingual-e5-large`).
@@ -431,16 +471,26 @@ by Claude.
 
 ## 7. Evaluation
 
-`[NEEDS INPUT: this section needs the final, reproducible backtest numbers. Fill
-the table from a fresh backtest run before submission.]`
+The numbers below are from a reproducible backtest of the final trained model
+(retrained 2026-07-05 on 80% of the award history; 16,812 training awards, 500
+held-out awards, winner guaranteed in the candidate pool). The backtest
+reconstructs the world as of each held-out tender and records where the true
+winner ranks. Source: `archive/data-exports/model_report.json`.
 
-| Metric | MVP target | Final target | Achieved |
+| Metric | MVP target | Final target | Achieved (2026-07-05) |
 |---|:--:|:--:|:--:|
-| Top-10 accuracy | ≥ 50% | ≥ 75% | `[NEEDS INPUT]` |
-| Top-5 accuracy | ≥ 30% | ≥ 55% | `[NEEDS INPUT]` |
-| Top-1 accuracy | — | ≥ 25% | `[NEEDS INPUT]` |
-| Hit@3 (v5 ref) | — | — | ≈ 55% |
-| Disqualifier false-positive rate | 0 | ≤ 1% | `[NEEDS INPUT]` |
+| Top-1 accuracy (Hit@1) | — | ≥ 25% | **44.2%** (221/500) ✔ |
+| Top-3 accuracy (Hit@3) | — | — | **54.0%** (270/500) |
+| Top-5 accuracy (Hit@5) | ≥ 30% | ≥ 55% | **57.6%** (288/500) ✔ |
+| Top-10 accuracy | ≥ 50% | ≥ 75% | `[NEEDS INPUT: not measured — eval reports up to Hit@5; extend to Hit@10]` |
+| Disqualifier false-positive rate | 0 | ≤ 1% | `[NEEDS INPUT: measure on the held-out set]` |
+
+The Top-1 and Top-5 final targets are met; the aspirational Top-10 ≥ 75% was not
+separately measured (the current eval stops at Hit@5). Relative to the previous
+50%-data model the retrain is essentially flat (Hit@3 54.8% → 54.0% on a harder,
+later held-out slice), and the model is structurally stable (same coefficient
+signs; strongest positive features: 4-digit CPV match, exact NUTS region, semantic
+similarity).
 
 Qualitative live-smoke evidence is strong: on a Czech road-resurfacing tender the
 top matches are genuine Czech road builders (EUROVIA, STRABAG, SWIETELSKY, PORR);

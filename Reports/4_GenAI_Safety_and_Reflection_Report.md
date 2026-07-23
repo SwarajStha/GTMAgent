@@ -8,6 +8,16 @@
 > lens of the project's KPIs and deliverables). **`[NEEDS INPUT]`** marks
 > team-supplied facts.
 
+> **── Sync update 2026-07-23: aligned to the current codebase (post-G20/G23/G25/G27) ──**
+> **Peers: review each item, then delete this block before submission.**
+> - **§2.4 (Reflection against KPIs)** — filled in with the real 2026-07-05 backtest
+>   (Hit@1 44.2% · Hit@3 54.0% · Hit@5 57.6%) and an honest reflection on why more
+>   training data didn't move the number. Confirm the framing.
+> - **§1.2** — added an honest caveat on the new runtime scheduler toggle / ops
+>   console (G27): it's currently unauthenticated (single-operator demo).
+> - **§1.5** — noted the train/serve feature-contract drift guard (G20) as a
+>   reliability control.
+
 ---
 
 ## 1. Safety of GenAI
@@ -74,6 +84,14 @@ agent was reworked into a layered guard set:
   on overflow); every run persists to `agent_runs`, and the full resumable conversation
   to `agent_sessions`, for review.
 
+**Honest caveat — operator controls are not yet authenticated.** Separate from the
+agent's own tools, the dashboard exposes an operator command console (`/retrain`,
+`/reflect`, `/schedule on|off|status`) that can start the background scheduler or
+trigger a retrain at runtime. These are *operator-invoked*, not agent-autonomous,
+and each is bounded, but they are currently **ungated by authentication** — acceptable
+for a single-operator demo, and a first candidate to place behind sign-in when the
+(deferred) auth phase lands.
+
 The takeaway, reinforced in §2, is that agent safety came from **removing capabilities
 and constraining defaults**, not from trusting a single flag.
 
@@ -109,6 +127,10 @@ document whether this was added.]`
   reserved for low-frequency drafting/orchestration, with prompt caching on stable
   tool/system definitions to keep cost low.
 - TLS via `truststore` prevents silent failures under corporate SSL inspection.
+- A **train/serve drift guard** (a CI-safe test pinning the live matcher's feature
+  vector to the committed model parameters) catches the class of silent bug where
+  the offline trainer and the online scorer disagree — protecting model correctness,
+  not just uptime.
 
 ### 1.6 Bias and fairness
 
@@ -187,10 +209,24 @@ documents).
 
 ### 2.4 Reflection against KPIs
 
-`[NEEDS INPUT: close the loop on the numeric KPIs — did the final backtest meet
-the Top-10 ≥ 75% / Top-5 ≥ 55% targets? If not, reflect honestly on why and what
-would close the gap. Reference the evaluation table in the Project Management
-Report §7.]`
+The final backtest (retrained 2026-07-05 on 80% of the award history; 500 held-out
+awards — see Project Management Report §7) reports **Hit@1 44.2%, Hit@3 54.0%,
+Hit@5 57.6%**. Measured against the stated final targets, **Top-1 (≥ 25%) is
+comfortably exceeded and Top-5 (≥ 55%) is met**; the aspirational **Top-10 ≥ 75%**
+was not separately measured, since the current backtest reports up to Hit@5 only —
+an honest gap in the evaluation rather than a known miss.
+
+The most instructive KPI finding is that **retraining on more data (50% → 80% of
+awards) did not move the number** — Hit@3 stayed flat at ≈ 54% on a harder, later
+held-out slice. This confirms the ceiling is *not* training-set size but **capability-
+profile quality**: profiles are built from thin award-history text rather than scraped
+company detail (documented in §2.2). What would most plausibly close the gap to the
+75% aspiration is richer company profiles and an embedding ensemble — both catalogued
+as future work — not simply more of the same data. The model is also structurally
+stable across retrains (consistent coefficient signs; strongest positive signals are
+CPV-category match, exact region, and semantic similarity), which is itself reassuring
+for an interpretable, defensible matcher. `[NEEDS INPUT: if the team runs a Hit@10 /
+MRR extension, add it here and reconcile against the Top-10 target.]`
 
 ---
 

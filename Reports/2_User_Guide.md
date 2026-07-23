@@ -9,6 +9,15 @@
 > high-resolution capture and every **`[NEEDS INPUT]`** with a real value before
 > submission.
 
+> **── Sync update 2026-07-23: aligned to the current build ──**
+> **Peers: review each item, then delete this block before submission.**
+> - **§4.3 (Adjustable weighting)** — rewritten: the weight sliders are now really
+>   wired (live client-side preview + an "Apply weights & re-rank" action that
+>   persists a server-side re-rank, G16). The old "partly cosmetic?" caveat is gone.
+> - **§4.6 (Agent / power users)** — added the new **ops command console**
+>   (`/retrain`, `/reflect`, `/schedule on|off|status`, `/help`) shipped in G27.
+> - `[SCREENSHOT]` markers still need real captures (unchanged).
+
 ---
 
 ## 1. What is GTM Agent?
@@ -96,11 +105,12 @@ recommended.
 
 ### 4.3 Adjustable weighting
 
-`[NEEDS INPUT / TEAM DECISION: the weight sliders are currently partly cosmetic —
-confirm whether real-time, client-side re-ranking is wired before describing it as
-a live feature. If wired:]` Move a slider (e.g. raise the importance of location)
-and the ranking re-sorts instantly, with no waiting — useful when you know
-something the data doesn't (e.g. a company is too small to deliver).
+Move a slider (e.g. raise the importance of location) and the ranking updates
+instantly as a **live preview** — useful when you know something the data doesn't
+(e.g. a company is too small to deliver). When you're happy with a weighting, click
+**Apply weights & re-rank** to save it: the backend re-scores the tender's pool with
+your weights and persists the new ranking, so it's there when you come back. (The
+👍/👎 feedback that retrains the model is separate — see §4.5.)
 
 `[SCREENSHOT: weight sliders]`
 
@@ -155,6 +165,25 @@ What makes it reliable and safe to use:
 
 `[SCREENSHOT: agent run — live activity log + disambiguation picker]`
 `[SCREENSHOT: agent result — Save results + 🥇/🥈/🥉 Draft-email buttons]`
+
+### 4.7 Ops command console (operators)
+
+The Agent screen also has a small **command console** for running maintenance
+actions without touching the API directly:
+
+- **`/retrain`** — retrains the matcher's weighting from the 👍/👎 feedback collected
+  so far.
+- **`/reflect`** — runs a reflection cycle that summarises recent activity and can
+  auto-retrain from feedback.
+- **`/schedule on | off | status`** — turns the background ingestion/reflection
+  schedule on or off (or reports whether it's running) — no restart needed.
+- **`/help`** — lists the available commands.
+
+These are convenience controls for whoever runs the instance. `[NEEDS INPUT: note
+that these actions are currently unauthenticated — fine for a single-operator demo;
+sign-in gating is planned future work.]`
+
+`[SCREENSHOT: ops command console]`
 
 ---
 

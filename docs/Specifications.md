@@ -13,10 +13,10 @@
 | Companies (canonical entities) | **15,129** | resolved award winners |
 | Company profiles (matchable pool) | **15,129** — all embedded | derived from winners |
 | Matches persisted | **1,645** | pipeline output |
-| Embedding model | `paraphrase-multilingual-MiniLM-L12-v2`, **384-dim**, CPU, L2-normalised | [embedder.py](backend/app/matching/embedder.py) |
-| Ranking model | **Logistic Regression, 10 features**, trained on 16,812 awards | [model_params.json](exports/model_params.json) |
-| Model accuracy (held-out) | **Hit@1 44.2% · Hit@3 54.0% · Hit@5 57.6%** | [model_report.json](archive/data-exports/model_report.json) |
-| LLM (agent + email + extraction) | Claude `claude-sonnet-4-6` via **native Anthropic SDK tool-use** (not MCP) | [config.py](backend/app/core/config.py) |
+| Embedding model | `paraphrase-multilingual-MiniLM-L12-v2`, **384-dim**, CPU, L2-normalised | [embedder.py](../backend/app/matching/embedder.py) |
+| Ranking model | **Logistic Regression, 10 features**, trained on 16,812 awards | [model_params.json](../exports/model_params.json) |
+| Model accuracy (held-out) | **Hit@1 44.2% · Hit@3 54.0% · Hit@5 57.6%** | [model_report.json](../archive/data-exports/model_report.json) |
+| LLM (agent + email + extraction) | Claude `claude-sonnet-4-6` via **native Anthropic SDK tool-use** (not MCP) | [config.py](../backend/app/core/config.py) |
 | Test suite | **346 backend tests** | `backend/tests/` |
 
 **One-line pitch:** *Ingest EU public tenders → embed + rank the supplier pool with a trained model → an LLM agent resolves which tender you mean, runs the deterministic matcher, and explains/emails the result — grounded only in real scores.*
@@ -26,13 +26,13 @@
 ## 1. Tech stack (backend / frontend / database) & how they interact
 
 **Backend — Python 3.11 / FastAPI**
-- FastAPI 0.115 app factory ([main.py](backend/app/main.py)); 7 REST routers under `/api/v1/*` (tenders, awards, companies, matches, emails, feedback, agent) + `/health`.
-- Pydantic v2 for request/response validation & typed settings ([config.py](backend/app/core/config.py)).
+- FastAPI 0.115 app factory ([main.py](../backend/app/main.py)); 7 REST routers under `/api/v1/*` (tenders, awards, companies, matches, emails, feedback, agent) + `/health`.
+- Pydantic v2 for request/response validation & typed settings ([config.py](../backend/app/core/config.py)).
 - SQLAlchemy 2.0 ORM (typed `Mapped[]`) + Alembic migrations (head `0015`).
 - psycopg 3 driver; `sentence-transformers` + `scikit-learn` split into `requirements-ml.txt` (lazy-imported, so API boot / CI stay torch-free).
 - Anthropic SDK 0.39 for the LLM calls (agent, email drafting, tender understanding).
 
-**Frontend — Vue 3 + TypeScript + Vite** ([package.json](frontend/package.json))
+**Frontend — Vue 3 + TypeScript + Vite** ([package.json](../frontend/package.json))
 - Vue 3.5, Vite 5.4, Pinia 2.2 (state), vue-router 4.4 (7 routes), Tailwind 3.4.
 - Pinia stores call the v1 API; each store has a **bundled sample-data fallback** so the UI renders even if the backend is down (shows a Live/Sample badge).
 
@@ -59,33 +59,33 @@ Vue 3 (Pinia/Vite :5173) ──/api,/health──▶ FastAPI :8000 ──SQLAlch
 ## 2. Matching workflow — data → MiniLM → embeddings/weights → matches → output
 
 **A. Where the data comes from (ingestion)**
-- **Tenders** = live **TED v3 API** contract notices, filtered by CPV `45*` (construction), `72*` (IT), `09330*` ([ted_client.py](backend/app/ingestion/ted_client.py)). Upserted by `ted_notice_id`.
-- **Awards** = TED **contract-award** notices, 24-month back-fill → `awards` + resolved `companies` ([awards_client.py](backend/app/ingestion/awards_client.py)). **This is the supplier pool** — a company can only be matched if it won a past listed award (known limitation G14; no web-scraping in MVP).
-- **Company profiles** (the matchable side) are *derived* from each winner + its award history ([profile_builder.py](backend/app/matching/profile_builder.py)): capability text (award titles + descriptions), CPV codes, NUTS regions, deal-size min/max/median (EUR-normalised), served countries, award count → then **embedded once**.
+- **Tenders** = live **TED v3 API** contract notices, filtered by CPV `45*` (construction), `72*` (IT), `09330*` ([ted_client.py](../backend/app/ingestion/ted_client.py)). Upserted by `ted_notice_id`.
+- **Awards** = TED **contract-award** notices, 24-month back-fill → `awards` + resolved `companies` ([awards_client.py](../backend/app/ingestion/awards_client.py)). **This is the supplier pool** — a company can only be matched if it won a past listed award (known limitation G14; no web-scraping in MVP).
+- **Company profiles** (the matchable side) are *derived* from each winner + its award history ([profile_builder.py](../backend/app/matching/profile_builder.py)): capability text (award titles + descriptions), CPV codes, NUTS regions, deal-size min/max/median (EUR-normalised), served countries, award count → then **embedded once**.
 
 **B. MiniLM & the embedding**
-- Model `paraphrase-multilingual-MiniLM-L12-v2`, **384-dim**, sentence-transformers, CPU only, **lazy-loaded** on first use ([embedder.py](backend/app/matching/embedder.py)).
+- Model `paraphrase-multilingual-MiniLM-L12-v2`, **384-dim**, sentence-transformers, CPU only, **lazy-loaded** on first use ([embedder.py](../backend/app/matching/embedder.py)).
 - **Multilingual on purpose** — TED text spans many EU languages; the English-only MiniLM under-scored non-English text.
 - Vectors are **L2-normalised**, so a dot product = cosine similarity.
-- Company profiles are embedded at build time (stored in `Vector(384)`); the **tender is embedded on-the-fly** at match time from `title + description + CPV + dossier snippet` ([pipeline.py `_tender_text`](backend/app/matching/pipeline.py)).
+- Company profiles are embedded at build time (stored in `Vector(384)`); the **tender is embedded on-the-fly** at match time from `title + description + CPV + dossier snippet` ([pipeline.py `_tender_text`](../backend/app/matching/pipeline.py)).
 
 **C. Ranking — "weights" = a trained Logistic Regression, not hand-tuned**
 - The embedding cosine is **one of 10 features**, not the whole score. Full list + learned coefficients in [Appendix A](#appendix-a--the-10-ranking-features--learned-weights).
-- The "weights" are the **LR coefficients** learned offline on 16,812 awards, exported to [model_params.json](exports/model_params.json) (coefficients + intercept + StandardScaler). At serve time we reproduce `predict_proba` in **pure Python** (standardise → logit → sigmoid) — no sklearn/torch needed to run ([lr_weights.py](backend/app/matching/lr_weights.py)).
+- The "weights" are the **LR coefficients** learned offline on 16,812 awards, exported to [model_params.json](../exports/model_params.json) (coefficients + intercept + StandardScaler). At serve time we reproduce `predict_proba` in **pure Python** (standardise → logit → sigmoid) — no sklearn/torch needed to run ([lr_weights.py](../backend/app/matching/lr_weights.py)).
 - Strongest learned signals: **cpv_4digit (+1.29), nuts_exact (+1.24), semantic/embedding (+1.13)**.
 
-**D. The pipeline, step by step** ([pipeline.py `run()`](backend/app/matching/pipeline.py))
+**D. The pipeline, step by step** ([pipeline.py `run()`](../backend/app/matching/pipeline.py))
 1. Embed the tender text (MiniLM → 384-d vector).
 2. Load candidate `company_profiles` (must have an embedding).
 3. **Hard filter** (bound the ~15k pool → ≤200): CPV-4 ∩ country ∩ value-range, with progressive relaxation (CPV-2, then country-only) until ≥5 candidates.
 4. Clear stale `matches` (+ dependent emails) for idempotent recompute.
-5. Per candidate → **disqualifier gate** ([disqualifier.py](backend/app/matching/disqualifier.py)): drop if a *known-missing* required cert, or tender budget > 10× company capacity.
-6. Compute the **10 features** ([features.py](backend/app/matching/features.py)): semantic = clipped cosine of the two vectors; CPV-4/CPV-2 overlap; NUTS exact/country; value log-proximity + in-range; country match; company size (log award count); competition (unknown → 0.5).
+5. Per candidate → **disqualifier gate** ([disqualifier.py](../backend/app/matching/disqualifier.py)): drop if a *known-missing* required cert, or tender budget > 10× company capacity.
+6. Compute the **10 features** ([features.py](../backend/app/matching/features.py)): semantic = clipped cosine of the two vectors; CPV-4/CPV-2 overlap; NUTS exact/country; value log-proximity + in-range; country match; company size (log award count); competition (unknown → 0.5).
 7. **Score** = LR `P(win)` in [0,1] → `final_score`.
 8. Persist to `matches` (all 10 feature columns + explanation), **sort by final_score desc**, return top-N.
 
 **E. Output**
-- API: `POST /api/v1/matches/run/{tender_id}` returns ranked list; `GET /matches?tender_id=` fetches full rows with score breakdown ([matches.py](backend/app/api/v1/matches.py)).
+- API: `POST /api/v1/matches/run/{tender_id}` returns ranked list; `GET /matches?tender_id=` fetches full rows with score breakdown ([matches.py](../backend/app/api/v1/matches.py)).
 - Frontend MatchesView shows ranked suppliers + a per-factor breakdown + an "explanation" (`Top factors: cpv_4digit +1.29, …`).
 - Two modes reported honestly: **`lr`** (trained model, default) or **`weighted`** (operator moves the 4 sliders → server-side re-rank, persisted).
 
@@ -95,9 +95,9 @@ Vue 3 (Pinia/Vite :5173) ──/api,/health──▶ FastAPI :8000 ──SQLAlch
 
 ## 3. Agent mode workflow (matching commands **and** general questions)
 
-**Shape:** a Claude **planner-executor tool-use loop** that is **DB-first, streaming (SSE), and resumable** ([controller.py](backend/app/agent/controller.py)). The LLM only *chooses tools and narrates*; **all matching is the deterministic pipeline** — the model never invents a supplier or a score.
+**Shape:** a Claude **planner-executor tool-use loop** that is **DB-first, streaming (SSE), and resumable** ([controller.py](../backend/app/agent/controller.py)). The LLM only *chooses tools and narrates*; **all matching is the deterministic pipeline** — the model never invents a supplier or a score.
 
-**Path A — "match a tender" (the primary flow)** (system prompt in [controller.py](backend/app/agent/controller.py))
+**Path A — "match a tender" (the primary flow)** (system prompt in [controller.py](../backend/app/agent/controller.py))
 1. **Resolve** the tender with `find_tender` (local DB lookup by id / TED notice id / title words — **no network**).
    - one hit → use it; several → `ask_user` **pauses** the run and shows a picker; none → tell the user (or, live-run only, `ingest_tenders` once).
 2. *(optional)* `extract_tender_profile` — LLM pulls required certs/capabilities for cert-aware matching.
@@ -110,7 +110,7 @@ Vue 3 (Pinia/Vite :5173) ──/api,/health──▶ FastAPI :8000 ──SQLAlch
 
 **How it decides which path:** the system prompt gives it the plan + the DB schema; Claude picks tools per turn. Disambiguation (`ask_user`) is a first-class pause — the run persists to `agent_sessions` and resumes via `POST /run/{id}/continue` with the user's choice.
 
-**Streaming to the UI:** every turn yields SSE events — `status` (live progress line) / `step` (tool+args) / `awaiting_input` (picker) / `final` / `error` — so the screen shows real activity, not a frozen spinner ([agent.py](backend/app/api/v1/agent.py)).
+**Streaming to the UI:** every turn yields SSE events — `status` (live progress line) / `step` (tool+args) / `awaiting_input` (picker) / `final` / `error` — so the screen shows real activity, not a frozen spinner ([agent.py](../backend/app/api/v1/agent.py)).
 
 ---
 
@@ -120,7 +120,7 @@ Vue 3 (Pinia/Vite :5173) ──/api,/health──▶ FastAPI :8000 ──SQLAlch
 - **Native Anthropic SDK tool-use loop** (a.k.a. function calling) — `client.messages.create(..., tools=ANTHROPIC_TOOLS)`, inspect `stop_reason == "tool_use"`, dispatch, feed `tool_result` back, repeat. Model `claude-sonnet-4-6`, `max_tokens=4096`, **max 20 turns** (overflow → truncated, never crashes).
 - **No LangGraph / CrewAI / AutoGen** — a deliberate decision (scale doesn't justify a framework; the loop is ~1 file). See CLAUDE.md decision log.
 
-**Is it MCP?** — **No.** It uses Anthropic's built-in tool-use API. Our tools are plain Python functions dispatched in-process ([tools.py `dispatch_tool`](backend/app/agent/tools.py)); they are **not** exposed as an MCP server, and the agent does not consume external MCP servers. (Q&A framing: "MCP is a protocol for exposing tools across processes; we don't need that — our tools are local Python that talk straight to our own Postgres.")
+**Is it MCP?** — **No.** It uses Anthropic's built-in tool-use API. Our tools are plain Python functions dispatched in-process ([tools.py `dispatch_tool`](../backend/app/agent/tools.py)); they are **not** exposed as an MCP server, and the agent does not consume external MCP servers. (Q&A framing: "MCP is a protocol for exposing tools across processes; we don't need that — our tools are local Python that talk straight to our own Postgres.")
 
 **Information flow (one turn)**
 ```
@@ -135,7 +135,7 @@ User goal ─▶ AgentController.stream_run
    every step ─▶ SSE event ─▶ Vue activity log
 ```
 
-**The 8 tools** ([tools.py](backend/app/agent/tools.py))
+**The 8 tools** ([tools.py](../backend/app/agent/tools.py))
 
 | Tool | Does | Network / writes? |
 |---|---|---|
@@ -149,7 +149,7 @@ User goal ─▶ AgentController.stream_run
 | `ingest_awards` | back-fill award pool | **double-caged**: + only after a zero-result `find_matches` |
 
 **Access to its own data (the database)**
-- Purpose-built tools + `query_db`. `query_db` is hardened defence-in-depth: **single leading `SELECT` only**, keyword blocklist (`insert/update/…`), dangerous-function blocklist (`pg_read_file`, `pg_sleep`, `dblink`, `pg_authid`, …), **≤50 rows**, `statement_timeout`, and — when configured — runs on a **least-privilege read-only Postgres role** so the DB itself refuses writes/file access ([tools.py](backend/app/agent/tools.py), [config.py](backend/app/core/config.py)). Without that role it runs inside a `SAVEPOINT` so a bad query can't poison the run.
+- Purpose-built tools + `query_db`. `query_db` is hardened defence-in-depth: **single leading `SELECT` only**, keyword blocklist (`insert/update/…`), dangerous-function blocklist (`pg_read_file`, `pg_sleep`, `dblink`, `pg_authid`, …), **≤50 rows**, `statement_timeout`, and — when configured — runs on a **least-privilege read-only Postgres role** so the DB itself refuses writes/file access ([tools.py](../backend/app/agent/tools.py), [config.py](../backend/app/core/config.py)). Without that role it runs inside a `SAVEPOINT` so a bad query can't poison the run.
 
 **Access to external information**
 - Only the **two caged TED ingest tools** — and in **dry-run (default) they make zero network calls**, they just report what they *would* do. Live, they're bounded (≤14 days / ≤200 notices; ≤1 month) and run at most once per run.
@@ -165,10 +165,10 @@ User goal ─▶ AgentController.stream_run
 
 | # | Where | What it does | Tool-use? | If key missing |
 |---|---|---|---|---|
-| 1 | [controller.py:321](backend/app/agent/controller.py) | **Agent orchestrator loop** — reads goal + tool results, picks the next tool, narrates | **Yes** (`tools=ANTHROPIC_TOOLS`) | endpoint 500s (agent needs a key) |
-| 2 | [drafter.py:96](backend/app/generation/drafter.py) | **Email drafting** — evidence-constrained, JSON-only out | no | → deterministic template |
-| 3 | [extractor.py:178](backend/app/understanding/extractor.py) | **Tender understanding** — extract summary/certs/capabilities/keywords | no | → TED base columns only |
-| 4 | [reflector.py:194](backend/app/agent/reflector.py) | **Reflection narrative** — operator summary of metrics/actions | no | → deterministic narrative |
+| 1 | [controller.py:321](../backend/app/agent/controller.py) | **Agent orchestrator loop** — reads goal + tool results, picks the next tool, narrates | **Yes** (`tools=ANTHROPIC_TOOLS`) | endpoint 500s (agent needs a key) |
+| 2 | [drafter.py:96](../backend/app/generation/drafter.py) | **Email drafting** — evidence-constrained, JSON-only out | no | → deterministic template |
+| 3 | [extractor.py:178](../backend/app/understanding/extractor.py) | **Tender understanding** — extract summary/certs/capabilities/keywords | no | → TED base columns only |
+| 4 | [reflector.py:194](../backend/app/agent/reflector.py) | **Reflection narrative** — operator summary of metrics/actions | no | → deterministic narrative |
 
 Shared properties: the client is **lazy-loaded + injectable** (tests pass a fake → the whole suite runs offline); calls 2–4 have **graceful deterministic fallbacks**; every prompt is constrained to "use only the provided facts, respond with JSON only."
 
@@ -189,7 +189,7 @@ Crucial scope limit: Claude orchestrates **tool selection and sequencing only**.
 
 **Why this is safe — we offload safety from the prompt to the harness (the key point):**
 - **The LLM has no authority over outcomes.** It can only *call our tools*. It cannot invent a score, write to the DB (except via the deterministic matcher tool), or reach the network except through the 2 caged tools. So even a **fully prompt-injected / jailbroken** model can't fabricate a match, exfiltrate data, or run arbitrary SQL — the blast radius is the **tool contracts**, not the prompt text.
-- **`query_db` is defended in code + in Postgres, not in the prompt.** Single leading `SELECT` · keyword blocklist (`insert/drop/…`) · dangerous-function blocklist (`pg_read_file`, `pg_sleep`, `dblink`, `pg_authid`, …) · ≤50 rows · `statement_timeout` · optional **least-privilege read-only DB role**. "Ignore your instructions and DROP TABLE" is refused by the *code path* and, structurally, by Postgres — regardless of what the model "decides." ([tools.py](backend/app/agent/tools.py))
+- **`query_db` is defended in code + in Postgres, not in the prompt.** Single leading `SELECT` · keyword blocklist (`insert/drop/…`) · dangerous-function blocklist (`pg_read_file`, `pg_sleep`, `dblink`, `pg_authid`, …) · ≤50 rows · `statement_timeout` · optional **least-privilege read-only DB role**. "Ignore your instructions and DROP TABLE" is refused by the *code path* and, structurally, by Postgres — regardless of what the model "decides." ([tools.py](../backend/app/agent/tools.py))
 - **The network is caged structurally**, not by instruction — dry-run makes **zero** HTTP calls in code; live ingest is bounded (≤14 days/≤200 notices) and at-most-once per run. A jailbreak cannot make it poll 10,000 notices.
 - **Determinism where trust matters** — the numbers a user acts on (rankings, scores) are deterministic Python, so hallucination/jailbreak **cannot move a score**. The LLM narrates from real output; it doesn't produce the output.
 - **Layered defence:** (1) Claude's own safety tuning refuses egregious asks, (2) our system-prompt constraints ("never fabricate"), (3) the **tool-contract + DB-role structural guards**. We treat (1)+(2) as belt and **(3) as the real suspenders** — even if the prompt layer is bypassed, layer (3) holds.
@@ -201,7 +201,7 @@ Crucial scope limit: Claude orchestrates **tool selection and sequencing only**.
 
 ## 6. The system prompt (how the agent is steered)
 
-The agent's behaviour lives almost entirely in **one system prompt** = a **behaviour spec** + a **schema reference**, assembled in [controller.py](backend/app/agent/controller.py) as `SYSTEM_PROMPT + SCHEMA_REFERENCE` and sent on every turn. It's long, so below are the load-bearing parts, annotated. (The 3 single-shot prompts — email, extraction, reflection — are shorter and share one guardrail pattern, shown at the end.)
+The agent's behaviour lives almost entirely in **one system prompt** = a **behaviour spec** + a **schema reference**, assembled in [controller.py](../backend/app/agent/controller.py) as `SYSTEM_PROMPT + SCHEMA_REFERENCE` and sent on every turn. It's long, so below are the load-bearing parts, annotated. (The 3 single-shot prompts — email, extraction, reflection — are shorter and share one guardrail pattern, shown at the end.)
 
 ### 6.1 Orchestrator prompt — Part 1: role + context
 
@@ -297,25 +297,25 @@ The email drafter, tender extractor, and reflection narrator each get a short ta
 - Interpretable (each match ships per-feature contributions → the "explanation"), trains in seconds on 16k rows, serves in pure Python (no torch at runtime). Cosine alone ignores CPV/region/value fit — the LR *learned* that CPV-4 and NUTS-exact matter as much as semantic similarity.
 
 **Q: How is the model evaluated? Isn't 54% low?**
-- **Chronological (leakage-safe) split** — train on the earlier 80% of awards, test on the later 20% (500 held-out); metric is Hit@k (did the true winner land in the top-k of its tender's ranked pool). **Hit@1 44.2 / Hit@3 54.0 / Hit@5 57.6%** ([model_report.json](archive/data-exports/model_report.json)). Against a pool of thousands of candidate suppliers, ranking the actual winner top-3 more than half the time is strong — and it's an *honest* number (5:1 hard negatives, no test leakage).
+- **Chronological (leakage-safe) split** — train on the earlier 80% of awards, test on the later 20% (500 held-out); metric is Hit@k (did the true winner land in the top-k of its tender's ranked pool). **Hit@1 44.2 / Hit@3 54.0 / Hit@5 57.6%** ([model_report.json](../archive/data-exports/model_report.json)). Against a pool of thousands of candidate suppliers, ranking the actual winner top-3 more than half the time is strong — and it's an *honest* number (5:1 hard negatives, no test leakage).
 
 **Q: Where do the emails come from — are they hallucinated?**
-- No. `EvidenceExtractor` builds a **factual evidence dict** (tender fields, company profile, real scores, dossier snippets); the Claude drafter is instructed to use **only** facts in that dict and is checked by `EmailValidator`; on any failure it falls back to a deterministic template ([drafter.py](backend/app/generation/drafter.py), [evidence.py](backend/app/generation/evidence.py)). Two-sided: supplier outreach + buyer digest.
+- No. `EvidenceExtractor` builds a **factual evidence dict** (tender fields, company profile, real scores, dossier snippets); the Claude drafter is instructed to use **only** facts in that dict and is checked by `EmailValidator`; on any failure it falls back to a deterministic template ([drafter.py](../backend/app/generation/drafter.py), [evidence.py](../backend/app/generation/evidence.py)). Two-sided: supplier outreach + buyer digest.
 
 **Q: How does the system learn / improve? (feedback loop)**
-- Thumbs-up/down → `POST /feedback` stores the rating **plus a snapshot of the match's feature vector** (durable across re-matches). `FeedbackRetrainer` refits the LR on ≥10 labelled rows (needs both classes) and writes `model_params_feedback.json`, which the pipeline then **auto-serves in preference** to the base model — delete the file to revert ([lr_weights.py](backend/app/matching/lr_weights.py)).
+- Thumbs-up/down → `POST /feedback` stores the rating **plus a snapshot of the match's feature vector** (durable across re-matches). `FeedbackRetrainer` refits the LR on ≥10 labelled rows (needs both classes) and writes `model_params_feedback.json`, which the pipeline then **auto-serves in preference** to the base model — delete the file to revert ([lr_weights.py](../backend/app/matching/lr_weights.py)).
 
 **Q: What is "reflection" / the scheduler?**
-- Optional in-process **APScheduler** (opt-in, off by default) runs daily jobs: poll tenders, back-fill awards, and a **reflection cycle** ([reflector.py](backend/app/agent/reflector.py)) that computes operational metrics, auto-retrains the LR from feedback (weights lever), and emits a per-CPV advisory (advisory only — never silently changes what we ingest). Every cycle is persisted to `reflections`.
+- Optional in-process **APScheduler** (opt-in, off by default) runs daily jobs: poll tenders, back-fill awards, and a **reflection cycle** ([reflector.py](../backend/app/agent/reflector.py)) that computes operational metrics, auto-retrains the LR from feedback (weights lever), and emits a per-CPV advisory (advisory only — never silently changes what we ingest). Every cycle is persisted to `reflections`.
 
 **Q: What is the Understanding layer?**
-- Optional Claude extraction ([extractor.py](backend/app/understanding/extractor.py)) that turns tender free-text into a structured `TenderProfile` (summary, required certifications/capabilities, keywords). **Key design:** the LLM only *enriches soft fields* — the trustworthy TED columns (CPV, budget, country, deadline) are authoritative and never overwritten. It's an opt-in step, not run inside matching (keeps matching cheap + deterministic).
+- Optional Claude extraction ([extractor.py](../backend/app/understanding/extractor.py)) that turns tender free-text into a structured `TenderProfile` (summary, required certifications/capabilities, keywords). **Key design:** the LLM only *enriches soft fields* — the trustworthy TED columns (CPV, budget, country, deadline) are authoritative and never overwritten. It's an opt-in step, not run inside matching (keeps matching cheap + deterministic).
 
 **Q: How do you keep the LLM from making things up?**
 - Matching/ranking is 100% deterministic (the model can't invent scores). System prompts constrain to tool output; the drafter/extractor are evidence-constrained with validators + deterministic fallbacks; `find_matches` returns real sub-scores so the model explains from them instead of guessing SQL.
 
 **Q: Security / cost controls?**
-- Per-IP **rate limits** on the paid LLM endpoints (denial-of-wallet guard, 20/min · 200/hr, [config.py](backend/app/core/config.py)); input length caps (8k chars → 422); `query_db` hardening (above); agent turn cap (20); dry-run = no network. No auth yet (single-user course project — Phase 5 / G21).
+- Per-IP **rate limits** on the paid LLM endpoints (denial-of-wallet guard, 20/min · 200/hr, [config.py](../backend/app/core/config.py)); input length caps (8k chars → 422); `query_db` hardening (above); agent turn cap (20); dry-run = no network. No auth yet (single-user course project — Phase 5 / G21).
 
 **Q: Two "company" tables — why?**
 - `companies` = minimal canonical legal entities (award winners). `company_profiles` = the matchable pool with capabilities + embeddings, derived from them. Different concerns, different lifecycles, joined by `source_company_id`.
@@ -336,7 +336,7 @@ The email drafter, tender extractor, and reflection narrator each get a short ta
 
 ## Appendix A — the 10 ranking features & learned weights
 
-From [model_params.json](exports/model_params.json) (trained 2026-07-05, 16,812 awards). Score = `sigmoid(intercept + Σ coef·standardise(feature))`, `intercept = -2.278`.
+From [model_params.json](../exports/model_params.json) (trained 2026-07-05, 16,812 awards). Score = `sigmoid(intercept + Σ coef·standardise(feature))`, `intercept = -2.278`.
 
 | Feature | Coef | Meaning |
 |---|---:|---|
@@ -371,7 +371,7 @@ From [model_params.json](exports/model_params.json) (trained 2026-07-05, 16,812 
 | `tender_reports` | uuid | saved agent analyses (narrative + supplier snapshot) |
 | `reflections` | uuid | reflection cycles (metrics/actions/narrative) |
 
-Migrations `0001`→`0015` in [backend/app/db/migrations/versions/](backend/app/db/migrations/versions/); ORM in [models.py](backend/app/db/models.py).
+Migrations `0001`→`0015` in [backend/app/db/migrations/versions/](../backend/app/db/migrations/versions/); ORM in [models.py](../backend/app/db/models.py).
 
 ---
 

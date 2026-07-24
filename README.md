@@ -170,8 +170,6 @@ GTMAgent/
 ├── exports/                  model_params.json — the runtime LR matcher artifact (+ README)
 ├── docs/                     architecture, system_architecture, Database_Explanation,
 │                               agentic_behavior_description, Specifications
-├── Reports/                  graded deliverables as Markdown (Project Management, User
-│                               Guide, UAT, GenAI Safety) + Screenshots/
 ├── archive/                  provenance only, not needed to run — data-exports/ (ML
 │                               training data), planning/, internal-logs/, data-samples/
 │                               (see archive/README.md)
@@ -369,5 +367,6 @@ GitHub Actions runs three jobs on every push and PR to `main`:
 | [README_ML_PIPELINE.md](README_ML_PIPELINE.md) | How the v5 matcher was trained and evaluated |
 | [scripts/seed/README.md](scripts/seed/README.md) | The demo seed — contents, loading, regeneration |
 | [backend/scripts/README.md](backend/scripts/README.md) | Smoke harnesses, test-DB setup, DB cheatsheet |
-| [Reports/](Reports/) | Graded course deliverables (Project Management, User Guide, UAT, GenAI Safety) |
 | [archive/README.md](archive/README.md) | Provenance material kept for reference, not needed to run |
+
+The four graded course reports (Project Management · User Guide · UAT · GenAI Safety) are submitted separately via Moodle.

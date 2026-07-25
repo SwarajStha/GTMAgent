@@ -37,10 +37,26 @@ services:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
       - ./backend:/app
+      # app/matching/lr_weights.py resolves the trained model at
+      # <repo-root>/exports/model_params.json (parents[3] from its own file,
+      # counted from inside /app/app/matching — i.e. container-root /exports).
+      # The build context is ./backend only, so without this mount the model
+      # never loads and matching silently falls back to the weaker legacy
+      # scorer. Mounted read-write on purpose: feedback retraining
+      # (POST /api/v1/feedback/retrain, and the scheduler's reflection cycle)
+      # writes model_params_feedback.json here, so :ro would break it. That
+      # generated file is gitignored, so a retrain leaves the tree clean.
+      - ./exports:/exports
 
   frontend:
     build:
       context: ./frontend
+    environment:
+      # The dev-server proxy's default (localhost:8000) only works when the
+      # frontend runs on the host next to a host-run backend. Inside Compose,
+      # "localhost" in the frontend container is the frontend container itself
+      # — reach the backend via its Docker network hostname instead.
+      VITE_API_PROXY_TARGET: http://backend:8000
     ports:
       - "5173:5173"
     depends_on:

@@ -13,10 +13,15 @@ prerequisite — no host Python needed:
 
 ```sh
 cp backend/.env.example backend/.env                    # optional: add ANTHROPIC_API_KEY
+                                                          #   (needed only for running the agent,
+                                                          #   drafting a fresh email, extracting a
+                                                          #   tender profile — see below)
 docker compose up -d db                                 # 1. Postgres + pgvector
 docker compose run --rm backend alembic upgrade head    # 2. create the schema
 ./scripts/seed/load_seed.sh                             # 3. load ~2 MB of real demo data
 docker compose up -d --build                            # 4. backend + frontend
+# optional: live "Find matches" for any tender — see "Live matching in Docker" below
+#   docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d --build
 ```
 
 On Windows PowerShell, step 3 is `powershell -File scripts\seed\load_seed.ps1`.
@@ -34,7 +39,19 @@ saved agent analyses are all populated with real (public) EU procurement data.
 **No API key is needed to look around.** The seeded emails and agent reports are
 pre-generated and the matching pipeline is deterministic, so every screen renders
 without one. Only *new* LLM output — running the agent, drafting a fresh email,
-extracting a tender profile — needs `ANTHROPIC_API_KEY` in `backend/.env`.
+extracting a tender profile — needs `ANTHROPIC_API_KEY` in `backend/.env`. Without
+a key, drafting a *new* email still works (it never errors) — it silently falls
+back to a deterministic template ([drafter.py](backend/app/generation/drafter.py))
+that fills real tender/company facts into a fixed skeleton, so it reads shorter
+and more mechanical than a Claude-written draft. The response's `generator` field
+(`"claude"` vs `"template"`) tells you which one you got.
+
+**"Find matches" needs the ML overlay.** The default backend image is
+intentionally lean (no `torch`), so clicking "Find matches" on a tender — live
+re-ranking — will fail with `ModuleNotFoundError: No module named
+'sentence_transformers'`. The 236 matches already in the seed display fine
+without it. To make live matching work, see [Live matching in
+Docker](#live-matching-in-docker) below.
 
 Details on the seed (what's in it, how to regenerate): [scripts/seed/README.md](scripts/seed/README.md).
 Working on the code instead? See [Development setup](#development-setup).
@@ -151,7 +168,7 @@ GTMAgent/
 │   │   └── agent/            controller (streaming, resumable), tools (8), reflector, progress
 │   ├── scripts/              ted_smoke, awards_smoke, agent_smoke, test_anthropic_schema,
 │   │                           create_readonly_role.sql — see backend/scripts/README.md
-│   ├── tests/                pytest suite (276 tests across 34 files)
+│   ├── tests/                pytest suite (349 tests across 34 files)
 │   ├── alembic.ini           script_location = app/db/migrations
 │   ├── requirements.txt      lean runtime deps (no torch)
 │   ├── requirements-ml.txt   sentence-transformers + scikit-learn + joblib
@@ -207,7 +224,7 @@ pip install -r requirements-dev.txt
 #   --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org
 cp .env.example .env       # then edit ANTHROPIC_API_KEY
 alembic upgrade head       # applies migrations 0001 → 0015
-pytest tests -v            # 276 tests (needs the gtm_test DB — see backend/scripts/README.md)
+pytest tests -v            # 349 tests (needs the gtm_test DB — see backend/scripts/README.md)
 uvicorn app.main:app --reload
 ```
 
@@ -275,6 +292,33 @@ curl -X POST http://localhost:8000/api/v1/emails/buyer/1/generate
 
 ---
 
+## Live matching in Docker
+
+The default `docker compose up --build` intentionally keeps the backend image
+lean (`requirements.txt`, no `torch`) — the seeded matches display fine, but
+**live** matching (clicking "Find matches" on a tender, or "Apply weights &
+re-rank") needs the ML stack (`sentence-transformers`, `scikit-learn`). Enable
+it with an overlay compose file instead of baking `torch` into the default
+image:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d --build
+```
+
+This installs the ML deps into the backend image (adds ~100s of MB and a
+noticeably slower `--build`) and downloads the MiniLM model on first use
+(~90 MB from Hugging Face — needs network access at that point). To go back to
+the lean image: `docker compose build backend` (without the `-f` overlay).
+
+`docker-compose.yml` also mounts the repo's `exports/` directory into the
+backend container at `/exports` — that's where `app/matching/lr_weights.py`
+looks for the trained model (`model_params.json`). Without this mount, matching
+silently falls back to a weaker legacy scorer; with it (already wired into the
+base compose file), the default path uses the same trained logistic-regression
+model as the rest of the app once the ML overlay is enabled.
+
+---
+
 ## API surface (v1)
 
 All routers are mounted under `/api/v1` and documented interactively at http://localhost:8000/docs.
@@ -320,9 +364,11 @@ Inside the Docker compose network both runtime URLs collapse to `db:5432`; the 6
 
 Once the DB is up, you can browse it via:
 
-- **psql in the container** (no install required):
+- **psql in the container** (no install required — run from the repo root, so
+  `docker compose` can resolve the `db` service regardless of what Compose named
+  the container):
   ```powershell
-  docker exec -it gtmagent-db-1 psql -U gtm -d gtm
+  docker compose exec db psql -U gtm -d gtm
   ```
 - **DBeaver / pgAdmin**: connect to `localhost:5432`, db `gtm`, user `gtm`, password `gtm`.
 - **One-shot queries**: see [backend/scripts/README.md](backend/scripts/README.md) for canned commands.
@@ -333,7 +379,7 @@ Once the DB is up, you can browse it via:
 
 GitHub Actions runs three jobs on every push and PR to `main`:
 
-1. **backend-test** — Python 3.11, install dev deps, spin up a Postgres service + create `gtm_test`, `pytest tests` (276 tests; the matching/agent tests inject fakes so the run stays torch-free)
+1. **backend-test** — Python 3.11, install dev deps, spin up a Postgres service + create `gtm_test`, `pytest tests` (349 tests; the matching/agent tests inject fakes so the run stays torch-free)
 2. **frontend-lint** — Node 20, `npm ci`, `npm run lint`, `npm run build`
 3. **migration-check** — Spins up a real `pgvector/pgvector:pg16` service, runs `alembic upgrade head` (0001 → 0015)
 

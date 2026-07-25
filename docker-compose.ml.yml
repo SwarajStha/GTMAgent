@@ -1,0 +1,20 @@
+# Optional overlay — installs the ML stack (sentence-transformers, scikit-learn)
+# into the backend image so "Find matches" works LIVE for any tender, not just
+# the ones with pre-computed matches in the demo seed. Adds torch (~100s of MB)
+# to the image, a noticeably slower `--build`, and a first-use download of the
+# MiniLM model (~90 MB from Hugging Face — needs network access at that point).
+#
+# The base docker-compose.yml stays lean/torch-free by design (see
+# backend/requirements.txt vs requirements-ml.txt) — this file only adds a
+# build arg on top of it, it does not replace anything.
+#
+# Usage (from the repo root):
+#   docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d --build
+#
+# To go back to the lean image: `docker compose build backend` (no -f overlay)
+# rebuilds it without the ML stack.
+services:
+  backend:
+    build:
+      args:
+        INSTALL_ML: "true"

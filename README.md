@@ -56,6 +56,15 @@ Docker](#live-matching-in-docker) below.
 Details on the seed (what's in it, how to regenerate): [scripts/seed/README.md](scripts/seed/README.md).
 Working on the code instead? See [Development setup](#development-setup).
 
+**When you're done**, free the ports — the stack holds `5432`, `6543`, `8000` and
+`5173` until you stop it, which will otherwise collide with a local Postgres or
+with the next project you run:
+
+```sh
+docker compose down       # stop + remove the containers, keep the seeded database
+docker compose down -v    # also drop the volume — full clean slate, nothing left behind
+```
+
 ---
 
 ## Current status

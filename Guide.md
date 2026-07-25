@@ -419,6 +419,11 @@ docker compose exec db psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer_countr
 
 ### When you're done for the day
 
+This is the dev-loop teardown (DB in Docker, servers on the host). If you ran the
+**full stack** in Docker instead, see the teardown note at the end of
+[README.md → Evaluating this project](README.md#evaluating-this-project-start-here) —
+that one also frees the backend/frontend ports (`8000`, `5173`).
+
 ```bash
 # Stop the dev servers: Ctrl+C in each terminal (uvicorn + vite).
 # Stop the DB container:

@@ -19,6 +19,13 @@ Current contents:
 > [archive/internal-logs/matching_pipeline_smoke_record.md](../../archive/internal-logs/matching_pipeline_smoke_record.md)
 > or the API (`POST /api/v1/matches/run/{tender_id}`).
 
+> **The `docker compose ...` commands below address the database by its Compose
+> *service* name (`db`), not a fixed container name.** Compose names the container
+> after the repo folder, so a clone into a differently-named directory gets a
+> different container name and a hardcoded one breaks. Run them from anywhere
+> inside the repo — Compose finds `docker-compose.yml` by searching up from your
+> current directory, so `backend/` works just as well as the repo root.
+
 ---
 
 ## One-time test database setup
@@ -28,8 +35,8 @@ The DB-touching tests in `backend/tests/ingestion/test_dossier_downloader.py` (a
 The fixtures don't auto-create the database itself (Postgres doesn't allow `CREATE DATABASE` inside a transaction, and we'd need elevated permissions). One-time setup, with the dev container running:
 
 ```powershell
-docker exec gtmagent-db-1 psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
-docker exec gtmagent-db-1 psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
+docker compose exec db psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
+docker compose exec db psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
 ```
 
 After that, the test fixtures handle everything (schema create/drop, per-test rollback). Verify with:
@@ -52,7 +59,7 @@ The app connects as `gtm`, which the pgvector image creates as a **superuser**. 
 One-time provisioning, with the dev container running:
 
 ```powershell
-docker exec -i gtmagent-db-1 psql -U gtm -d gtm < backend\scripts\create_readonly_role.sql
+docker compose exec -T db psql -U gtm -d gtm < backend\scripts\create_readonly_role.sql
 ```
 
 Then point the app at the role by adding to `backend/.env`:
@@ -66,10 +73,10 @@ Restart the backend. `query_db` now runs on the `gtm_ro` connection; everything 
 Verify the role is correctly locked down (all but the first should be **denied**):
 
 ```powershell
-docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "SELECT count(*) FROM tenders;"          # OK
-docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "SELECT pg_read_file('/etc/passwd');"     # permission denied
-docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "SELECT rolpassword FROM pg_authid;"      # permission denied
-docker exec gtmagent-db-1 psql -U gtm_ro -d gtm -c "CREATE TABLE x (i int);"                 # read-only transaction
+docker compose exec db psql -U gtm_ro -d gtm -c "SELECT count(*) FROM tenders;"          # OK
+docker compose exec db psql -U gtm_ro -d gtm -c "SELECT pg_read_file('/etc/passwd');"     # permission denied
+docker compose exec db psql -U gtm_ro -d gtm -c "SELECT rolpassword FROM pg_authid;"      # permission denied
+docker compose exec db psql -U gtm_ro -d gtm -c "CREATE TABLE x (i int);"                 # read-only transaction
 ```
 
 ---
@@ -93,15 +100,17 @@ It runs in two phases (either can be skipped via flags):
 
 The same prereqs as the rest of the backend (see the [root README](../../README.md#prerequisites)):
 
-- Docker Desktop running with the project's `gtmagent-db-1` container up
+- Docker Desktop running with the project's `db` container up
 - Python 3.11 venv at `backend/.venv` with `pip install -r backend/requirements-dev.txt`
 - `backend/.env` populated (the script chdirs to `backend/` internally so Settings finds it)
 
 Quick prerequisite check:
 
 ```powershell
-docker ps --filter "name=gtm" --format "table {{.Names}}\t{{.Status}}"
-# Expected: gtmagent-db-1   Up X minutes (healthy)
+docker compose ps db
+# Expected: the db service listed as "running (healthy)".
+# (Compose names the container after your repo folder, e.g. <folder>-db-1, so
+#  address it by the SERVICE name `db` rather than a fixed container name.)
 ```
 
 If the container isn't up: `docker compose up -d db` from the repo root.
@@ -245,7 +254,7 @@ After a `--live` run, here are copy-paste queries for inspecting the `tenders` t
 ### Row counts across all tables
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT 'tenders' AS t, count(*) FROM tenders UNION ALL SELECT 'awards', count(*) FROM awards UNION ALL SELECT 'companies', count(*) FROM companies UNION ALL SELECT 'company_profiles', count(*) FROM company_profiles UNION ALL SELECT 'documents', count(*) FROM documents UNION ALL SELECT 'matches', count(*) FROM matches UNION ALL SELECT 'emails', count(*) FROM emails UNION ALL SELECT 'feedback', count(*) FROM feedback UNION ALL SELECT 'embeddings', count(*) FROM embeddings ORDER BY 1;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT 'tenders' AS t, count(*) FROM tenders UNION ALL SELECT 'awards', count(*) FROM awards UNION ALL SELECT 'companies', count(*) FROM companies UNION ALL SELECT 'company_profiles', count(*) FROM company_profiles UNION ALL SELECT 'documents', count(*) FROM documents UNION ALL SELECT 'matches', count(*) FROM matches UNION ALL SELECT 'emails', count(*) FROM emails UNION ALL SELECT 'feedback', count(*) FROM feedback UNION ALL SELECT 'embeddings', count(*) FROM embeddings ORDER BY 1;"
 ```
 
 Tells you which tables have data. After Job 1, only `tenders` should be populated. After Job 2 (`awards_smoke.py --live`), `awards` and `companies` will be populated too.
@@ -253,7 +262,7 @@ Tells you which tables have data. After Job 1, only `tenders` should be populate
 ### Show schema of the tenders table
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d tenders"
+docker compose exec db psql -U gtm -d gtm -c "\d tenders"
 ```
 
 Lists every column with its type, nullability, default, and indexes/FKs referencing it. Best one-shot view of what the table looks like.
@@ -261,7 +270,7 @@ Lists every column with its type, nullability, default, and indexes/FKs referenc
 ### List all rows with key parsed columns
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer_country, deadline::date, substr(title, 1, 60) FROM tenders;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer_country, deadline::date, substr(title, 1, 60) FROM tenders;"
 ```
 
 Quick scan: did we get notices from a variety of countries? Are deadlines sensible? Are titles populated?
@@ -269,7 +278,7 @@ Quick scan: did we get notices from a variety of countries? Are deadlines sensib
 ### Full raw JSON for one notice (pretty-printed)
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT jsonb_pretty(raw_json) FROM tenders WHERE ted_notice_id = '326612-2026';"
+docker compose exec db psql -U gtm -d gtm -c "SELECT jsonb_pretty(raw_json) FROM tenders WHERE ted_notice_id = '326612-2026';"
 ```
 
 Swap the `ted_notice_id` for any value you saw in the previous query. This is the **complete original TED notice** — every field TED returned, including ones we don't surface in dedicated columns yet. Useful when designing future jobs (the matcher and drafter will mine this for evidence).
@@ -277,7 +286,7 @@ Swap the `ted_notice_id` for any value you saw in the previous query. This is th
 ### Side-by-side: parsed columns vs. raw fields they came from
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id AS parsed_id, raw_json->>'publication-number' AS raw_id, title AS parsed_title, raw_json->'BT-21-Procedure' AS raw_BT21, buyer_country AS parsed_country, raw_json->'buyer-country' AS raw_country, cpv_codes AS parsed_cpvs, raw_json->'classification-cpv' AS raw_cpvs FROM tenders WHERE ted_notice_id = '326612-2026';"
+docker compose exec db psql -U gtm -d gtm -c "SELECT ted_notice_id AS parsed_id, raw_json->>'publication-number' AS raw_id, title AS parsed_title, raw_json->'BT-21-Procedure' AS raw_BT21, buyer_country AS parsed_country, raw_json->'buyer-country' AS raw_country, cpv_codes AS parsed_cpvs, raw_json->'classification-cpv' AS raw_cpvs FROM tenders WHERE ted_notice_id = '326612-2026';"
 ```
 
 Documents the field mapping in actual data — useful for understanding how `from_ted_response` translates each TED key into our schema. The mapping logic lives in [backend/app/ingestion/schemas.py](../app/ingestion/schemas.py).
@@ -285,7 +294,7 @@ Documents the field mapping in actual data — useful for understanding how `fro
 ### Verify the upsert path bumped updated_at correctly
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, ingested_at, updated_at, ingested_at < updated_at AS was_updated FROM tenders ORDER BY ted_notice_id;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT ted_notice_id, ingested_at, updated_at, ingested_at < updated_at AS was_updated FROM tenders ORDER BY ted_notice_id;"
 ```
 
 After two consecutive `--live` runs, all rows should show `was_updated = t`. After the first run, all should be `f`.
@@ -293,7 +302,7 @@ After two consecutive `--live` runs, all rows should show `was_updated = t`. Aft
 ### Export one row's raw JSON to a file for browsing in your editor
 
 ```powershell
-docker exec gtmagent-db-1 psql -U gtm -d gtm -t -A -c "SELECT jsonb_pretty(raw_json) FROM tenders WHERE ted_notice_id = '326612-2026';" > c:\dev\GTMAgent\backend\storage\sample_326612.json
+docker compose exec -T db psql -U gtm -d gtm -t -A -c "SELECT jsonb_pretty(raw_json) FROM tenders WHERE ted_notice_id = '326612-2026';" > backend\storage\sample_326612.json
 ```
 
 Then open `backend\storage\sample_326612.json` in VS Code. The `-t -A` flags strip psql's header/borders for clean JSON output.
@@ -301,7 +310,7 @@ Then open `backend\storage\sample_326612.json` in VS Code. The `-t -A` flags str
 ### Truncate the table (start fresh)
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "TRUNCATE tenders RESTART IDENTITY CASCADE;"
+docker compose exec db psql -U gtm -d gtm -c "TRUNCATE tenders RESTART IDENTITY CASCADE;"
 ```
 
 Wipes all rows and resets the autoincrement counter. `CASCADE` follows FKs into `documents`/`matches` (Job 2's `awards` table is NOT a child of `tenders` and won't be touched).
@@ -315,14 +324,14 @@ After a `--live` run of `awards_smoke.py`, here are the parallel queries for the
 ### Show schema
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d awards"
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d companies"
+docker compose exec db psql -U gtm -d gtm -c "\d awards"
+docker compose exec db psql -U gtm -d gtm -c "\d companies"
 ```
 
 ### Join awards to their resolved winners
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT a.ted_notice_id, c.canonical_name AS winner, a.buyer_country, a.contract_value_eur, a.award_date FROM awards a LEFT JOIN companies c ON c.id = a.winner_canonical_id ORDER BY a.award_date DESC NULLS LAST LIMIT 20;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT a.ted_notice_id, c.canonical_name AS winner, a.buyer_country, a.contract_value_eur, a.award_date FROM awards a LEFT JOIN companies c ON c.id = a.winner_canonical_id ORDER BY a.award_date DESC NULLS LAST LIMIT 20;"
 ```
 
 Quick scan: did each award resolve to a `companies` row? Are buyer countries plausible? Are contract values populated for most rows?
@@ -330,7 +339,7 @@ Quick scan: did each award resolve to a `companies` row? Are buyer countries pla
 ### See the winner-dedup in action
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT canonical_name, resolution_key, jsonb_array_length(aliases::jsonb) AS n_aliases, aliases FROM companies WHERE jsonb_array_length(aliases::jsonb) > 1 ORDER BY n_aliases DESC;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT canonical_name, resolution_key, jsonb_array_length(aliases::jsonb) AS n_aliases, aliases FROM companies WHERE jsonb_array_length(aliases::jsonb) > 1 ORDER BY n_aliases DESC;"
 ```
 
 Lists companies that have more than one alias — i.e. cases where `resolve_or_create` collapsed variant spellings ("Hochtief AG" + "Hochtief Aktiengesellschaft") into one row.
@@ -338,7 +347,7 @@ Lists companies that have more than one alias — i.e. cases where `resolve_or_c
 ### Find awards where winner resolution didn't run
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, winner_raw_name FROM awards WHERE winner_canonical_id IS NULL;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT ted_notice_id, winner_raw_name FROM awards WHERE winner_canonical_id IS NULL;"
 ```
 
 Should be empty after a clean `--live` run. Non-empty means a row landed without the entity-resolution savepoint completing — investigate the log for `Failed to upsert award notice id=...`.
@@ -346,7 +355,7 @@ Should be empty after a clean `--live` run. Non-empty means a row landed without
 ### Truncate awards + companies (start fresh)
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "TRUNCATE awards, companies RESTART IDENTITY CASCADE;"
+docker compose exec db psql -U gtm -d gtm -c "TRUNCATE awards, companies RESTART IDENTITY CASCADE;"
 ```
 
 Both tables together so the FK doesn't trip. `tenders` is untouched.

@@ -139,7 +139,7 @@ We've shipped **ingestion** (Jobs 1–3) plus the **matching pipeline**, a **two
 - **Entity resolution** (`entity_resolution.py`): **Identifier-first** — matches on `registration_id` (tax id from TED) when present, else on a normalised `resolution_key` (strip punctuation + legal suffixes like "GmbH"/"AG"/"Ltd"). Merges variant spellings sharing an id; splits distinct entities sharing a trading name. `clean_identifier()` rejects junk ids that would false-merge companies.
 - **Matching** (`app/matching/`): two layers — `profile_builder.build_company_profiles()` derives the `company_profiles` supplier pool from award winners; `pipeline.MatchingPipeline.run()` ranks the pool for a tender. Embedder/weights are injectable so tests run torch-free.
 - **Agent** (`app/agent/`): `controller.py` runs a Claude tool-use loop; `tools.py` defines the 6 tools + read-only `query_db` guard; `reflector.py` summarises recent runs + feedback.
-- **Tests**: 276 passing locally across 34 files (stub imports, health, config, ingestion, matching, agent, understanding, and per-router API tests against a real `gtm_test` Postgres). CI runs them on every push.
+- **Tests**: 349 across 34 files (stub imports, health, config, ingestion, matching, agent, understanding, and per-router API tests against a real `gtm_test` Postgres). Locally: 348 pass, 1 skips (a contract test that needs a feedback-tuned model on disk). CI skips a couple more that need the optional ML deps. CI runs them on every push.
 - **ML export**: the full awards back-fill is exported to `exports/` (`awards_training.csv`, `companies.csv`), which feeds the v5 LR training harness (`exports_ml_pipeline.py`) that produces `exports/model_params.json` for the in-app matcher.
 - **The empirically-hard TED API contract** — the TED v3 expert search rejects most "obvious" field names from the docs (`cpv-code` → use `classification-cpv`, `winner-name` → use `organisation-name-tenderer`, etc.). The current `TED_FIELDS` and `AWARD_FIELDS` lists were beaten into shape over multiple live iterations.
 
@@ -244,7 +244,7 @@ Already done: ingestion (Jobs 1–3), the matching pipeline, the two-sided email
 4. **Matching, the two-sided email backend, the REST API, and the Claude agent are all built and working.** Still stubs: the APScheduler loop, the Claude understanding/`FieldExtractor` layer, LR-weight retraining, and auth.
 5. **The database has 11 tables in 2 sub-graphs**: ingestion (`tenders`, `awards`, `companies`, `documents`) and matching/emails/agent (`company_profiles`, `matches`, `emails`, `feedback`, `embeddings`, `agent_runs`) — bridged by `company_profiles.source_company_id`. Migration head is `0008`.
 6. **The TED API contract is empirically discovered, not documented** — check the supported-fields list in a 400 response before touching `TED_FIELDS` / `AWARD_FIELDS`. Don't trust the official docs over the existing code.
-7. **CI runs 3 jobs on every push**: backend pytest (276 tests, against a `gtm_test` Postgres), frontend lint+build, and an Alembic migration check against a fresh pgvector container.
+7. **CI runs 3 jobs on every push**: backend pytest (349 tests, against a `gtm_test` Postgres), frontend lint+build, and an Alembic migration check against a fresh pgvector container.
 
 ---
 
@@ -315,8 +315,8 @@ docker compose up -d db
 Wait ~10 seconds for it to be healthy. Verify:
 
 ```bash
-docker ps
-# Should show gtmagent-db-1 as "healthy"
+docker compose ps db
+# Should show the db service as "healthy"
 ```
 
 ### Step 5 — Set up the backend (Python venv)
@@ -329,19 +329,21 @@ pip install -r requirements-dev.txt
 # optional — only for REAL semantic matching / building company_profile embeddings:
 #   pip install -r requirements-ml.txt   (heavy: pulls torch)
 alembic upgrade head            # applies migrations 0001 → 0008
-pytest tests -v                 # 276 tests (needs the gtm_test DB — see Step 6)
+pytest tests -v                 # 349 tests (needs the gtm_test DB — see Step 6)
 ```
 
 ### Step 6 — Create the test database (one-time)
 
-The DB-touching tests use a separate `gtm_test` database. Create it once:
+The DB-touching tests use a separate `gtm_test` database. Create it once (these work
+from anywhere inside the repo, including `backend/` — Compose finds
+`docker-compose.yml` by searching up from your current directory):
 
 ```bash
-docker exec gtmagent-db-1 psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
-docker exec gtmagent-db-1 psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
+docker compose exec db psql -U gtm -d gtm -c "CREATE DATABASE gtm_test;"
+docker compose exec db psql -U gtm -d gtm_test -c "CREATE EXTENSION vector;"
 ```
 
-Re-run `pytest tests -v` — all 276 tests should now pass on Postgres.
+Re-run `pytest tests -v` — you should see 348 passed, 1 skipped on Postgres.
 
 ### Step 7 — Start the backend dev server
 
@@ -396,7 +398,7 @@ python scripts/ted_smoke.py
 python scripts/ted_smoke.py --live
 
 # Then peek at the data:
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer_country, deadline FROM tenders;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer_country, deadline FROM tenders;"
 ```
 
 ### What to expect on first run
@@ -405,7 +407,7 @@ docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT ted_notice_id, buyer
 - **First `pip install -r requirements-dev.txt`** downloads and builds wheels for ~40 packages. Takes 2–5 minutes. PyMuPDF and pgvector may compile from source briefly.
 - **First `npm ci`** downloads ~300 MB into `node_modules/`. Takes 1–2 minutes. You may see deprecation warnings — they're benign (a dev-server-only esbuild advisory that doesn't affect production builds).
 - **First `alembic upgrade head`** runs the migrations in sequence and prints `INFO  [alembic.runtime.migration] Running upgrade ...` lines. Takes <2 seconds.
-- **First `pytest tests -v`** — 276 tests, takes ~10–20 seconds. If any test fails on first run, the most likely cause is that you forgot Step 6 (create `gtm_test` database) — fix that and re-run.
+- **First `pytest tests -v`** — 349 tests, takes ~10–20 seconds. If any test fails on first run, the most likely cause is that you forgot Step 6 (create `gtm_test` database) — fix that and re-run.
 - **Browser loads the Home view in ~300ms** with a clean "Backend status: ok" line. If that line says "Backend status: error" or never shows, your `uvicorn` isn't running or the Vite proxy can't reach it — check that uvicorn shows traffic in its log when you reload the page.
 
 ### Common Mac-specific gotchas

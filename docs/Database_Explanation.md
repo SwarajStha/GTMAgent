@@ -441,10 +441,11 @@ cd backend
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-To inspect the current head:
+To inspect the current head (works from anywhere inside the repo — Compose finds
+`docker-compose.yml` by searching up from the current directory):
 
 ```powershell
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "SELECT version_num FROM alembic_version;"
+docker compose exec db psql -U gtm -d gtm -c "SELECT version_num FROM alembic_version;"
 ```
 
 ---
@@ -473,7 +474,7 @@ The fastest path is the psql one-liners documented in [backend/scripts/README.md
 
 ```powershell
 # Row counts across all tables
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "
+docker compose exec db psql -U gtm -d gtm -c "
   SELECT 'tenders' AS t, count(*) FROM tenders
   UNION ALL SELECT 'awards', count(*) FROM awards
   UNION ALL SELECT 'companies', count(*) FROM companies
@@ -482,7 +483,7 @@ docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "
   ORDER BY 1;"
 
 # Joined view: each award → its canonical winner
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "
+docker compose exec db psql -U gtm -d gtm -c "
   SELECT a.ted_notice_id, c.canonical_name, a.buyer_country,
          a.contract_value_eur, a.award_date
   FROM awards a
@@ -490,7 +491,7 @@ docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "
   ORDER BY a.award_date DESC;"
 
 # Schema of a single table (column list + indexes + FKs)
-docker exec -it gtmagent-db-1 psql -U gtm -d gtm -c "\d awards"
+docker compose exec db psql -U gtm -d gtm -c "\d awards"
 ```
 
 For GUI inspection, [DBeaver](https://dbeaver.io/) connected to `localhost:5432`, db `gtm`, user `gtm`, password `gtm` works well — JSONB columns expand inline.

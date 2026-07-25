@@ -19,11 +19,18 @@ cd backend && alembic upgrade head && cd ..   # create the schema (0001 → 0015
 powershell -File scripts\seed\load_seed.ps1     # Windows PowerShell
 ```
 
-Both helpers load with `ON_ERROR_STOP=1` in a byte-safe way (the bash script
-streams the file to `psql` over stdin; the PowerShell script `docker cp`s it in
-and runs `psql -f`), so the multilingual company/tender text isn't re-encoded.
-Default container name is `gtmagent-db-1`; pass another as the first argument /
-`-Container` if yours differs (`docker ps` to check).
+Both helpers resolve the database via the Compose **service** name (`db`), not a
+guessed container name — Compose names containers after the project folder (a
+repo cloned as `GTMAgent` gets `gtmagent-db-1`; a clone into `some-other-folder`
+gets a completely different name), so a hardcoded name breaks for anyone who
+clones into a differently-named directory. Run the helpers from the repo root
+(where `docker-compose.yml` lives) so `docker compose` can find the project.
+
+Both also load with `ON_ERROR_STOP=1` in a byte-safe way (the bash script streams
+the file to `psql` over stdin; the PowerShell script copies it in and runs
+`psql -f`), so the multilingual company/tender text isn't re-encoded, and both
+now fail loudly (non-zero exit + a clear error) instead of silently reporting
+success if a step fails.
 
 Load into an **empty** post-migration database. Loading on top of existing rows
 will fail on primary-key conflicts (by design — it's a seed, not an upsert).

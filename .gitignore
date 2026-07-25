@@ -31,11 +31,22 @@ storage/
 *.sqlite
 *.sqlite3
 
+# Feedback-retrained model weights — generated at runtime by
+# POST /api/v1/feedback/retrain (and the scheduler's reflection cycle), which the
+# matcher then prefers over the committed base model. Machine-specific and
+# regenerable from the feedback rows in the DB, so it stays out of git; delete it
+# to revert to exports/model_params.json. NOTE: the base model_params.json IS
+# tracked (the app loads it at runtime) — do not broaden this to exports/*.json.
+exports/model_params_feedback.json
+
 # Logs
 *.log
 
-# Claude internal context (not for the team)
+# Claude internal context + local tool settings (not for the team).
+# .claude/settings.json holds per-machine tool permissions (absolute local paths),
+# so it is local-only rather than shared.
 CLAUDE.md
+.claude/
 
 # Third-party course material — kept locally, never committed
 GenAI_Lecture01_Intro.pdf

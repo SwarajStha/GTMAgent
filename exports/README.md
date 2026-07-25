@@ -7,7 +7,10 @@ Holds the **one ML artifact the running application depends on**:
   The app loads it at runtime via `app/matching/lr_weights.py`
   (`repo-root/exports/model_params.json`). At runtime, feedback retraining may
   additionally write `model_params_feedback.json` here, which the matcher
-  prefers when present (delete it to revert to the base model).
+  prefers when present (delete it to revert to the base model). That generated
+  file is **gitignored** — it's machine-specific and regenerable from the
+  feedback rows in the DB, so it won't show up as an untracked change if you run
+  a retrain (including inside Docker, where `exports/` is mounted read-write).
 
 Regenerate `model_params.json` with the trainer:
 

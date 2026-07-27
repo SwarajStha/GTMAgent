@@ -7,7 +7,12 @@
 set -e
 cd "$(dirname "$0")"
 
-# Two passes so the table of contents and page numbers resolve correctly.
+# Three passes. Two are enough only when FinalReport.aux/.toc already exist from
+# an earlier build. On a fresh clone they do not, and the run goes 32 pages (no
+# contents yet) -> 33 pages (contents inserted), so a second pass still prints the
+# page numbers measured during the first. The third pass is what makes a clean
+# checkout produce byte-for-byte the same PDF as an incremental build.
+pdflatex -interaction=nonstopmode -halt-on-error FinalReport.tex
 pdflatex -interaction=nonstopmode -halt-on-error FinalReport.tex
 pdflatex -interaction=nonstopmode -halt-on-error FinalReport.tex
 

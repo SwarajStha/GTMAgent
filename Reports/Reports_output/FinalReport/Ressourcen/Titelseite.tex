@@ -1,0 +1,54 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Integrated title page (TUM corporate design) for a course report.
+% Reads the metadata commands defined in the main file (CourseReport.tex).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{titlepage}
+\thispagestyle{empty}
+\setlength{\parindent}{0pt}
+\renewcommand{\arraystretch}{1.25} % compact rows (overrides the 1.8 used for body tables)
+
+% TUM logo, top right
+{\raggedleft\includegraphics[width=19mm]{./Ressourcen/Universitaet_Logo_RGB.pdf}\par}
+
+\vspace{24mm}
+
+% Title (and optional subtitle); \raggedright so long titles wrap without overflow
+{\raggedright\fontsize{24pt}{28pt}\selectfont\textbf{\ReportTitle}\par}
+\ifdefempty{\ReportSubtitle}{}{%
+    \vspace{12pt}%
+    {\raggedright\fontsize{16pt}{20pt}\selectfont\ReportSubtitle\par}%
+}
+
+\vspace{10pt}
+{\fontsize{13pt}{16pt}\selectfont Project report\par}
+
+% Flexible space above AND below the info block (ratio 2:1) keeps it in the lower
+% third yet lets it shrink so the page never overflows, even with many members.
+\vspace*{0pt plus 2fil}
+
+% Metadata block
+{\fontsize{12pt}{17pt}\selectfont
+\begin{tabular}{@{}p{36mm}>{\raggedright\arraybackslash}p{102mm}@{}}
+\textbf{Course}        & \Course         \\
+\textbf{Term}          & \Term           \\
+\textbf{Lecturer}      & \Lecturer       \\
+\textbf{Chair}         & \Chair          \\
+\textbf{School}        & \School         \\
+\textbf{Group}         & \GroupName      \\
+\textbf{Submitted on}  & \SubmissionDate \\
+\end{tabular}\par}
+
+\vspace{7mm}
+
+% Team members (group submission)
+{\fontsize{12pt}{17pt}\selectfont
+\textbf{Team members}\par
+\vspace{2mm}
+\begin{tabular}{@{}p{75mm}l@{}}
+\textit{Name} & \textit{Matriculation No.} \\[1mm]
+\TeamMembers
+\end{tabular}\par}
+
+\vspace*{0pt plus 1fil} % lower half of the flexible space (see note above)
+\end{titlepage}

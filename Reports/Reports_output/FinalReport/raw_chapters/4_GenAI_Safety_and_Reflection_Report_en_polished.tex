@@ -1,0 +1,120 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=1.8cm,top=1.6cm,bottom=1.7cm]{geometry}
+\usepackage{fontspec}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\setmainfont{Times New Roman}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,pdftitle={GenAI Safety and Reflection Report -- GTM Agent}}
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{GTM Agent -- GenAI Safety and Reflection Report}
+\rhead{TUM \textbar{} CITHN2014}
+\cfoot{\thepage}
+\setlength{\headheight}{13pt}
+\setlength{\emergencystretch}{1em}
+
+\begin{document}
+
+{\LARGE\bfseries GenAI Safety and Reflection Report}\par\vspace{-1pt}
+{\small GTM Agent \quad|\quad TUM \textbar{} CITHN2014 -- Foundations and Applications of Generative AI}\par\vspace{4pt}
+\hrule\vspace{3pt}
+\setcounter{tocdepth}{2}
+\tableofcontents
+\clearpage
+
+\textit{Scope and evidence basis.} GTM Agent supports business development in EU public procurement by ingesting public TED notices and historical awards, ranking candidate suppliers, and producing outreach drafts for human review. This report draws on the implemented system, the project backtest, and a five-participant user-acceptance test (UAT). Throughout the report, implemented controls, evaluation findings, and residual boundaries are treated separately so that design intent is not mistaken for evidence of safety.
+
+\section{System boundary and evaluation lens}
+
+A safety assessment begins by defining GenAI's authority and the evidence that supports each conclusion.
+
+\subsection{Where GenAI is used}
+GTM Agent does not delegate the full decision chain to a single language model. GenAI performs three bounded tasks: extracting soft fields from tender material into a schema, drafting emails from a structured evidence object, and orchestrating a restricted set of workflow tools. Supplier ranking remains outside the generative path and combines multilingual sentence embeddings, deterministic business rules, and logistic regression. This division makes the recommendation path measurable and explainable while confining the model to language and orchestration tasks.
+
+\subsection{What counts as project evidence}
+This allocation of responsibilities also determines how the project should be evaluated. The project vision specified a working two-sided MVP, a hybrid matcher, feedback and retraining, reviewable email drafts, an agent interface, a ranking backtest, and UAT. The final model was trained on 16,812 historical awards and evaluated on 500 held-out awards, with the known winner present in the candidate pool. Hit@1, Hit@3, and Hit@5 were 44.2\% (221/500), 54.0\% (270/500), and 57.6\% (288/500), respectively. The final Top-1 ($\geq25\%$) and Top-5 ($\geq55\%$) targets were therefore reached. Because Hit@10 and MRR were not reported, no conclusion is drawn about those measures.
+
+\section{Safety of GenAI}
+
+Within this boundary, risks arise from untrusted inputs, agent actions, generated outputs, and system operation.
+
+\subsection{Factual integrity of generated emails}
+Email drafting is the point at which generated content becomes directly visible to users, making factual integrity the primary output risk. An inaccurate statement about a supplier's capabilities, a tender deadline, or prior work could damage the user's professional credibility. The system therefore assembles the tender record, supplier profile, score breakdown, match explanation, and selected document excerpts before asking Claude to draft from that evidence alone. If the model call, JSON parsing, or structural validation fails, a deterministic template is produced from the same evidence. Every output is stored as a \texttt{draft}; the product does not send email automatically.
+
+These measures reduce the opportunity for unsupported content to enter a draft, but they do not establish that every statement has been verified. The current \texttt{EmailValidator} checks the subject, body, and length; it does not compare each claim with a source item. Human review therefore remains a necessary control. A production version should extract factual claims, require each claim to resolve to an identifiable source, and reject any claim for which that link cannot be established.
+
+\subsection{Agent authority and unintended actions}
+Beyond generated content, the agent's principal risk arises from its authority to act. An early version treated \texttt{dry\_run} as a safety switch, although the setting prevented database writes without preventing network activity. A routine request could therefore start costly TED polling and document scanning. The revised design makes dry-run network-free for the remaining ingestion tools, resolves tenders from the local database by default, and removes bulk dossier download from the agent's tool set.
+
+Live ingestion is further bounded by a look-back window, a row limit, and a once-per-goal rule; award ingestion is subject to an additional condition. The database tool accepts read-only queries, blocks write verbs, limits returned rows, and uses a read-only connection when configured. If a partial title matches several tenders, \texttt{ask\_user} displays the candidates and requests confirmation. This handoff preserves business context that the model cannot infer reliably and prevents subsequent matching or drafting from being built around the wrong tender.
+
+These controls constrain the agent itself, but the operator console requires separate governance. Its scheduler and retraining commands support a single-operator demonstration and are not yet authenticated. Deployment would therefore require access control and an audit policy for those commands.
+
+\subsection{Untrusted inputs, provenance, and privacy}
+Restricting tool authority does not remove the risk carried by the text itself. Tender descriptions and dossier documents are untrusted inputs and may contain instructions unrelated to the system's task. Schema-constrained extraction, evidence-bounded drafting, restricted tools, and downstream validation narrow their influence. These controls do not eliminate prompt injection; they limit its consequences. In particular, untrusted text cannot directly alter the deterministic ranking path or obtain general write access through the agent.
+
+Provenance controls complement these technical restrictions. The project uses public TED notices and public historical awards rather than private customer data. Raw API payloads are retained, the evidence object is stored with each draft, and documents retain their source URL and content hash. Files behind authenticated buyer portals are marked \texttt{restricted}; the downloader does not bypass access controls. These measures support source inspection and reduce collection risk, although deployment would still require retention periods, role-based access, and a privacy review process.
+
+\subsection{Reliability, cost, and fairness}
+Safety also depends on predictable behaviour under component failure and resource pressure. Rate limiting and retries constrain TED ingestion, local embeddings reduce external calls for frequent queries, and a train--serve feature-contract test checks that the deployed matcher receives the features used in training. The deterministic email fallback provides an explicit degradation path instead of silently returning an incomplete result.
+
+Operational reliability does not imply fair recommendations. Historical award data may repeatedly favour established suppliers. Component scores and adjustable weights make the basis of a recommendation visible, but visibility does not remove incumbency advantage. Because the project has not reported a fairness metric or a new-entrant correction, future evaluation should examine exposure and ranking quality for smaller and recently formed suppliers, not only the retrieval of historical winners.
+
+\section{Lessons learned and reflection}
+
+Functional delivery, ranking KPIs, and user feedback must be considered together to distinguish implementation from product effect.
+
+\subsection{Deliverables were integrated, but their evidence differs}
+The project integrated TED ingestion, entity resolution, hybrid matching, evidence-backed draft generation, feedback and retraining, agent orchestration, an API, and a dashboard into an MVP, thereby delivering most of the planned components. Yet the existence of a component does not by itself establish product value. The ranking backtest provides quantitative evidence for the matcher, while UAT adds workflow-level evidence. Together, these evaluations give a more meaningful account of completion than a component checklist alone.
+
+\subsection{What the ranking KPI teaches}
+The matcher reached its reported Top-1 and Top-5 targets, indicating that the hybrid approach can identify relevant suppliers within the defined candidate pool. Increasing the training share from 50\% to 80\% did not, however, improve Hit@3: the value changed from 54.8\% to 54.0\% on a harder, later held-out slice. This pattern is more consistent with a representation constraint than with a simple shortage of training examples. Company capability profiles are derived mainly from award-history text, which provides a thinner account of current capabilities than a verified supplier profile. Enriching those profiles or adding an embedding ensemble may therefore be more effective than adding further examples of the same type.
+
+\subsection{What the UAT teaches}
+Where the backtest measures whether the system retrieves the known winner, UAT examines whether users can interpret and act on the result. Five bidder-side participants from transportation, energy, and construction completed think-aloud sessions covering candidate discovery, weight adjustment, and email drafting. The table below summarises task completion and participant ratings.
+
+\begin{center}
+{\small\textbf{Table 1.} Core UAT results ($n=5$).}\par\vspace{1pt}
+\small
+\renewcommand{\arraystretch}{0.92}
+\begin{tabular}{@{}p{0.64\linewidth}r@{}}
+\hline
+\textbf{Measure} & \textbf{Result} \\
+\hline
+Full / partial task completion & 2 / 3 \\
+Mean task time & 23 min \\
+Perceived lead quality (1--5) & 3.8 \\
+Explanation trust (1--5) & 3.4 \\
+Email usability (1--5) & 3.7 \\
+Agent trust and transparency (1--5) & 3.7 \\
+Overall usefulness (1--10) & 8.2 \\
+\hline
+\end{tabular}
+\end{center}
+
+Perceived lead quality exceeded explanation trust by 0.4 points. Participants could recognise the business value of the candidates without fully understanding why each company held its rank. This pattern supports the decision to retain component scores and adjustable weights, but it also shows that displaying a score is not equivalent to providing an explanation. A future interface should connect each recommendation directly to its CPV, geographic, budget, and semantic evidence in language aligned with the user's decision task. Because the sample contained only five participants, these findings indicate design priorities rather than population-level effects.
+
+\subsection{Development practices that worked}
+The most effective technical decision was assigning ranking to classical ML and rules, which kept the recommendation path measurable and open to audit. An interpretable architecture still required testing against real data. Live TED responses exposed differences between documented and observed fields, while repeated smoke tests identified errors in qualification scoring and budget normalisation. These practices were complementary: the architecture provided an inspectable system, and empirical testing established whether it behaved as intended on real inputs.
+
+\subsection{What should change in a future project}
+The same experience revealed an organisational weakness: interfaces between parallel workstreams should have been agreed earlier. The simpler in-application matcher and the stronger standalone model were unified late, increasing integration work. Evaluation requires similar advance coordination. Each KPI should be assigned a fixed dataset snapshot, an owner, a reproducible script, and a decision date at the start of development so that Hit@10, MRR, safety tests, and before--after retraining comparisons progress alongside implementation.
+
+Explicit scope management helped contain this complexity. Authenticated scraping, multi-tenancy, blueprint parsing, and a knowledge graph remained future work instead of being added late. Following that decision, the next stage should deepen validation of the existing workflow through claim-to-source checks for emails, authenticated operator controls, a larger UAT with a human baseline, and fairness analysis for companies with limited award histories.
+
+\section{How the project changed our understanding of GenAI}
+
+Taken together, the technical and evaluation evidence changed how the team understood GenAI's role. In this setting, the model is not a general decision-maker; it is a language and tool-orchestration component bounded by evidence objects, schemas, permissions, and user confirmation. The early dry-run incident made this distinction concrete: a control is effective only when it blocks the specific action that produces the risk.
+
+The UAT also separated usefulness from trust. A system may surface valuable candidates while users remain uncertain about the reasoning, and a fluent draft may still require factual review. Evaluating a GenAI application therefore requires more than a model benchmark or satisfaction score. Task completion, ranking quality, factual support, user understanding, operational limits, and post-error auditability must be considered together.
+
+\section{Conclusion}
+
+GTM Agent now forms an integrated MVP. The ranking backtest supports the matcher's principal targets, while UAT provides positive, although limited, evidence about use of the workflow. The system's safety case rests on complementary architectural controls: evidence-constrained generation, human review, restricted tools, offline-by-default agent behaviour, and traceable public-data inputs. The next stage should continue testing these boundaries, with particular attention to email-claim verification, operator access control, and broader user and fairness evaluation.
+
+\end{document}

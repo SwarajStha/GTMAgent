@@ -1,0 +1,26 @@
+# Scoped to Reports/Reports_output/ — keeps LaTeX build output out of the repo
+# without touching the root .gitignore. Patterns are relative to this folder.
+#
+# What IS tracked here: the LaTeX sources under FinalReport/, build.sh, and the
+# submitted PDF (GTM_Agent_Final_Report.pdf), so the report can be read without a
+# LaTeX toolchain and rebuilt with FinalReport/build.sh.
+
+# pdflatex intermediates — regenerated on every build, never worth committing
+*.aux
+*.toc
+*.lof
+*.lot
+*.out
+*.log
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# The build directory's own copy of the PDF. build.sh writes FinalReport.pdf here
+# and then copies it to ../GTM_Agent_Final_Report.pdf, which is the tracked one;
+# ignoring this avoids storing the same 1.6 MB file twice.
+FinalReport/FinalReport.pdf
+
+# Original drafts the chapters were adapted from (the .docx are already covered
+# by the root .gitignore; this catches the exported PDF alongside them)
+FinalReport/raw_chapters/*.pdf

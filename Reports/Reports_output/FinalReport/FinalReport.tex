@@ -1,0 +1,110 @@
+% !TEX program = pdflatex
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% GTM Agent — Final Report (all four deliverables combined into one PDF)
+% Course: Foundations and Application of Generative AI
+%
+% Build:
+%   pdflatex FinalReport.tex   (run twice for the table of contents)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% \documentclass is declared HERE (not in Praeambel) so the editor detects
+% THIS file as the compile root. The rest of the preamble is loaded below.
+\documentclass[fontsize=11pt,twoside=off]{scrbook}
+\input{./Ressourcen/Praeambel.tex}
+
+%=============================================================================
+%  >>> REPORT METADATA <<<
+%=============================================================================
+\newcommand{\ReportTitle}{GTM Agent}
+\newcommand{\ReportSubtitle}{}
+\newcommand{\Course}{Foundations and Application of Generative AI}
+\newcommand{\Term}{Summer Semester 2026}
+\newcommand{\Lecturer}{Prof.\ Dr.\ Chunyang Chen}
+\newcommand{\Chair}{Chair of Software Engineering \& AI}
+\newcommand{\School}{TUM School of Computation, Information and Technology}
+\newcommand{\GroupName}{Group2}
+\newcommand{\TeamMembers}{%
+    Jingyi Shao      & 03798142 \\
+    Sihao Tao        & 03793452 \\
+    Swaraj Shrestha  & 03816043 \\
+    Trinh Nguyen     & 03824365 \\
+    Xinyi Li         & 03814492 \\
+    Yilang Mei       & 03759865 \\
+    Zijian Luo       & 03817807%
+}
+\newcommand{\SubmissionDate}{\today}
+
+\input{./Ressourcen/Anfang.tex}
+
+\begin{document}
+
+\input{./Ressourcen/Titelseite.tex}
+
+\tableofcontents
+\clearpage
+
+\addcontentsline{toc}{chapter}{List of Figures}
+\listoffigures
+\clearpage
+
+\addcontentsline{toc}{chapter}{List of Tables}
+\listoftables
+\clearpage
+
+%=============================================================================
+%  PART 1 — USER GUIDE
+%=============================================================================
+\part{User Guide}
+\input{./chapters/01_user_guide.tex}
+
+%=============================================================================
+%  PART 2 — PROJECT MANAGEMENT REPORT
+%=============================================================================
+\part{Project Management Report}
+\input{./chapters/02_project_management.tex}
+
+%=============================================================================
+%  PART 3 — USER ACCEPTANCE TESTING REPORT
+%=============================================================================
+\part{User Acceptance Testing Report}\label{part:uat}
+\input{./chapters/03_uat.tex}
+
+%=============================================================================
+%  PART 4 — GENAI SAFETY AND REFLECTION REPORT
+%=============================================================================
+\part{GenAI Safety and Reflection Report}\label{part:safety}
+\input{./chapters/04_safety_reflection.tex}
+
+%=============================================================================
+%  CLOSING — REFERENCES + GENAI USAGE ACKNOWLEDGMENT (whole submission)
+%=============================================================================
+\cleardoublepage
+\input{./chapters/references.tex}
+
+\cleardoublepage
+\input{./chapters/appendix_a.tex}
+
+\cleardoublepage
+\chapter*{Acknowledgment of GenAI Usage}
+\addcontentsline{toc}{chapter}{Acknowledgment of GenAI Usage}
+
+All four documents in this submission were written with the help of AI-based writing
+assistants --- principally a Claude-based assistant, with OpenAI ChatGPT additionally
+used while preparing the User Acceptance Testing report --- using the team's own
+project materials (the code base, working notes, and earlier drafts), and were then
+reviewed, corrected, and finalised by the team.
+
+Concretely, GenAI was used to:
+\begin{itemize}
+\item draft and refine wording for clarity and readability;
+\item organise each report and produce its LaTeX layout; and
+\item help generate supporting visualisations, tables, and diagrams from our own data.
+\end{itemize}
+
+It was used as an assistant, not as an unchecked author: every factual claim, number,
+and figure was verified by the team against the project's own sources, and the content
+was edited to meet the quality bar expected of the submission. Within the product
+itself, GTM Agent uses Anthropic Claude for the orchestration agent and
+evidence-grounded email drafting, and open-source models for the matching pipeline.
+
+\end{document}

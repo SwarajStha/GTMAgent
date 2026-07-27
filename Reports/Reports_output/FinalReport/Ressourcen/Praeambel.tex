@@ -1,0 +1,111 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Preamble — based on the official TUM "Wissenschaftliche Arbeit" template,
+% adapted for the GTM Agent combined final report (4 parts in one PDF).
+% NOTE: biblatex/biber is intentionally NOT used here (no biber binary in this
+% build environment); references are typeset as a plain list per chapter instead.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% NOTE: \documentclass is declared in FinalReport.tex (the main file), not here,
+% so the editor detects FinalReport.tex as the compile root. This file is loaded
+% right after \documentclass, so it may start issuing \usepackage immediately.
+\usepackage{scrlayer-scrpage} % customizable headers/footers
+
+\usepackage[utf8]{inputenc} % text encoding: UTF-8
+\usepackage[T1]{fontenc}    % font encoding
+
+\usepackage[english]{babel} % English localization
+\usepackage{graphicx}       % graphics
+\usepackage{float}          % [H] placement: pin figures/tables exactly in place
+\usepackage{tikz}           % simple flow diagram in the User Guide
+\usetikzlibrary{positioning,arrows.meta}
+\tikzset{flowbox/.style={draw, rounded corners, fill=black!4, align=center,
+  font=\footnotesize, minimum height=9mm, text width=18mm, inner sep=2pt}}
+\usepackage{amsmath}        % math
+\usepackage{booktabs}       % nicer table rules (\toprule, \midrule, \bottomrule)
+\usepackage{longtable}      % tables that span pages
+\usepackage{xltabular}      % longtable + tabularx X column (cross-page balanced tables)
+\usepackage{array}
+\usepackage{etoolbox}       % \ifdefempty etc. (used by the title page)
+
+% Font Helvetica (TUM corporate design):
+\usepackage[scaled]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+
+% Hyphenation:
+\usepackage{hyphenat}
+\hyphenation{TUM Figure Figures GTM}
+
+\usepackage[hidelinks]{hyperref}          % hyperlinks
+\usepackage[onehalfspacing]{setspace}     % 1.5 line spacing
+\usepackage{calc}      % length calculations
+\usepackage{enumitem}  % more control over list environments
+\usepackage{relsize}   % relative font sizing
+\usepackage{tabularx}  % flexible tables
+\usepackage[tablewithout, figurewithout]{caption} % caption customization
+
+% Continuous numbering of figures & tables (instead of per-chapter):
+\usepackage{chngcntr}
+\counterwithout{figure}{chapter}
+\counterwithout{table}{chapter}
+
+% Special command definitions:
+\newcommand{\Thema}{}
+
+\usepackage{bookmark} % PDF bookmarks
+
+% A few Unicode characters used in the source Markdown are not in pdfLaTeX's
+% default inputenc table; map them explicitly.
+\usepackage{newunicodechar}
+\newunicodechar{§}{\S}
+\newunicodechar{·}{\textperiodcentered}
+\newunicodechar{→}{\ensuremath{\rightarrow}}
+\newunicodechar{↔}{\ensuremath{\leftrightarrow}}
+\newunicodechar{≤}{\ensuremath{\leq}}
+\newunicodechar{≥}{\ensuremath{\geq}}
+
+% Emoji -> monochrome icons. pdfLaTeX has no emoji font, so 👍 / 👎 would error;
+% these map them to FontAwesome thumbs, letting the source keep using the emoji.
+\usepackage{fontawesome5}
+\newunicodechar{👍}{\faThumbsUp}
+\newunicodechar{👎}{\faThumbsDown}
+
+% Helper macro emitted by pandoc for compact lists:
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+% All report images are read directly from the repo's Reports/Screenshots/ folder
+% (single source of truth — no duplicate copy). The path is RELATIVE to
+% FinalReport.tex: FinalReport -> Reports_output -> mei_doc -> repo root, then
+% Reports/Screenshots/. If you move the FinalReport folder, update this line.
+% With this, \includegraphics{Foo.png} and \screenshot{Foo.png} find the file by
+% its bare name, so use the real filenames from Reports/Screenshots (spaces are
+% not allowed by graphicx, but parentheses are fine).
+\graphicspath{{../../../Reports/Screenshots/}}
+
+% Screenshot helper: \screenshot[short caption]{file}{caption}. Keeps figures
+% readable and consistent across the User Guide. The optional first argument is
+% the short form used in the List of Figures; it defaults to the full caption.
+\newcommand{\screenshot}[3][\relax]{%
+  \begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\linewidth]{#2}%
+    \ifx\relax#1\relax\caption{#3}\else\caption[#1]{#3}\fi
+  \end{figure}%
+}
+
+% Reference-list entry: APA-style hanging indent.
+\newcommand{\refitem}[1]{\par\noindent\hangindent=8mm\hangafter=1 #1\par\vspace{1.4mm}}
+
+% Suppress layout-related warnings:
+\usepackage[immediate]{silence}
+\WarningFilter[layout]{latex}{Reference `LastPage'}
+\WarningFilter[layout]{lastpage}{Rerun to get the references right}
+\WarningFilter[layout]{latex}{Label(s) may have changed.}
+\WarningFilter[layout]{textpos}{environment textblock* not in vertical mode}
+\WarningFilter[layout]{scrbook}{Change of }
+\WarningFilter[layout]{tocbasic}{number width of}
+\WarningFilter{latex}{Font shape declaration has incorrect series value} % harmless psnfss t1phv.fd quirk
+
+% Debugging:
+%\DeactivateWarningFilters[layout]
+%\usepackage{showframe}

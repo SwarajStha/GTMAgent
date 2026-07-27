@@ -1,0 +1,144 @@
+% !TEX root = ../FinalReport.tex
+\chapter{GenAI Safety and Reflection Report}
+
+\textit{Scope and evidence.} GTM Agent supports EU-procurement business development by
+ingesting public TED notices and historical awards, ranking candidate suppliers, and
+drafting outreach for human review. This report draws on the implemented system, the
+ranking backtest, and a five-participant user-acceptance test (UAT), and keeps
+implemented controls, evaluation findings, and residual boundaries distinct so that
+design intent is not mistaken for evidence of safety.
+
+\section{System boundary and evaluation lens}
+
+\textbf{Where GenAI is used.} GTM Agent does not hand the whole decision chain to one
+model. GenAI performs three bounded tasks: extracting soft fields into a schema,
+drafting emails from a structured evidence object, and orchestrating a restricted tool
+set. Supplier ranking stays outside the generative path (multilingual embeddings,
+deterministic rules, and logistic regression), keeping the recommendation measurable
+and explainable while confining the model to language and orchestration.
+
+\textbf{What counts as evidence.} The vision specified a two-sided MVP, a hybrid
+matcher, feedback and retraining, reviewable drafts, an agent, a ranking backtest, and
+UAT. The final model, trained on the earlier 16,812 awards and evaluated on 500
+chronologically later held-out awards, reached Hit@1 / Hit@3 / Hit@5 of
+44.2\% / 54.0\% / 57.6\%, meeting the Top-1 ($\geq25\%$) and Top-5 ($\geq55\%$) targets.
+Two boundaries qualify that number. The test set is restricted to tenders whose winner
+is a company the system already knows, so it measures ranking, not coverage of unknown
+firms; but the winner is not exempted from the hard filter, and the 26.6\% of cases in
+which the filter removes it are counted as misses rather than excluded. Hit@10 and MRR
+were not reported, so no claim is made about them.
+
+\section{Safety of GenAI}
+
+Risks arise from generated outputs, agent actions, untrusted inputs, and operation.
+
+\textbf{Factual integrity of emails.} Emails are where generated content reaches users,
+so an inaccurate claim about a supplier, a deadline, or prior work is the primary
+output risk --- and fluent, confident, unsupported text is a well-documented failure
+mode of generative models rather than an occasional defect (Ji et al., 2023). The
+system assembles the tender record, supplier profile, scores, match
+explanation, and document excerpts, then asks Claude to draft from that evidence alone;
+if the model call, JSON parsing, or validation fails, a deterministic template is built
+from the same evidence. Every output is stored as a \texttt{draft} and nothing is sent
+automatically. These measures limit unsupported content but do not verify every
+statement: the current \texttt{EmailValidator} checks subject, body, and length, not
+each claim against a source, so human review remains necessary, and a production
+version should require every claim to resolve to an identifiable source.
+
+\textbf{Agent authority.} An early version treated \texttt{dry\_run} as a safety
+switch, but it blocked database writes without blocking network calls, so a routine
+request could start costly TED polling and document scanning. The revised agent makes
+dry-run network-free, resolves tenders from the local database by default, and removes
+bulk dossier download entirely. Live ingestion is bounded (look-back window, row limit,
+once per goal, with an extra condition on award ingestion); the database tool is
+read-only (write verbs blocked, row cap, read-only connection); and \texttt{ask\_user}
+pauses on ambiguity rather than guessing. The operator console (scheduler, retraining)
+is still unauthenticated and would need access control and an audit policy before
+deployment.
+
+\textbf{Untrusted inputs, provenance, and privacy.} Tender and dossier text is
+attacker-influenced and may carry instructions unrelated to the task --- the indirect
+prompt-injection channel described by Abdelnabi et al.\ (2023), in which the payload
+reaches the model through retrieved content rather than through the user's own turn.
+Schema-constrained extraction, evidence-bounded drafting, restricted tools, and
+downstream validation limit --- though do not eliminate --- that channel: untrusted
+text cannot alter the deterministic ranking path or gain general write access. The data
+is public TED and award records, not private customer data; raw payloads, the evidence
+object, and each document's source URL and content hash are retained; files behind
+buyer-portal logins are marked \texttt{restricted} rather than scraped. Two
+qualifications follow. Supplier contact addresses derived from company websites are
+still personal data under Regulation (EU) 2016/679 even though their source is public,
+so deployment would need a lawful basis, retention periods, role-based access, and a
+privacy review. And because the system generates text that is sent to people on the
+system's suggestion, the transparency and human-oversight duties of Regulation (EU)
+2024/1689 are the relevant compliance frame for a production version, even though a
+lead-generation assistant is not itself a high-risk system under that regulation.
+
+\textbf{Reliability, cost, and fairness.} Rate limiting and retries bound TED
+ingestion, local embeddings cut external calls, and a train--serve feature-contract
+test guards the deployed matcher, with the deterministic email fallback as an explicit
+degradation path. Reliability is not fairness, however: award-history training can
+entrench incumbents, and although component scores and adjustable weights make the
+basis of a recommendation visible, they do not remove that advantage. With no fairness
+metric yet reported, future evaluation should measure ranking quality for smaller and
+newer suppliers, not only the recovery of past winners; the ranked group-fairness
+criterion of Zehlike et al.\ (2017), which constrains the representation of a protected
+group within every prefix of a top-\textit{k} list, is a concrete candidate measure for
+that, with firm age or size as the grouping attribute.
+
+\section{Lessons learned and reflection}
+
+\textbf{Delivery versus evidence.} The MVP integrated ingestion, entity resolution,
+hybrid matching, evidence-backed drafting, feedback and retraining, the agent, an API,
+and a dashboard, but a component existing does not by itself prove product value. The
+backtest gives quantitative evidence for the matcher and UAT adds workflow-level
+evidence; together they describe completion better than a checklist.
+
+\textbf{What the ranking KPI teaches.} The matcher met its Top-1 and Top-5 targets, yet
+raising the training share from 50\% to 80\% did not improve Hit@3 (54.8\% to 54.0\%).
+The two runs use different held-out slices, so this is not a controlled comparison and
+the roughly one-point difference is within noise; the reading we take from it is
+therefore modest --- more data of the same kind did not move the metric. That points to
+a representation limit rather than too few examples, since capability profiles are built
+from thin award-history text. Enriching those profiles or adding an embedding ensemble
+is the more promising direction, and a controlled ablation on a fixed slice would be
+needed to confirm it.
+
+\textbf{What the UAT teaches.} Where the backtest asks whether the system retrieves the
+known winner, UAT asks whether users can interpret and act on the result. Five
+bidder-side participants from transportation, energy, and construction completed
+think-aloud sessions covering candidate discovery, weight adjustment, and email
+drafting; the full per-participant results are in Part~\ref{part:uat},
+Figure~\ref{fig:uat-participants}. Perceived lead quality (3.8/5) exceeded explanation
+trust (3.4/5): users saw the business value of the candidates but not always why each
+ranked where it did. Showing a score is not the same as explaining it, so a future
+interface should tie each recommendation to its CPV, geographic, budget, and semantic
+evidence. With only five participants these are design priorities, not population-level
+effects.
+
+\textbf{Practices that worked, and what to change.} Assigning ranking to classical ML
+and rules kept the path measurable and auditable, and repeated smoke tests against live
+TED data caught defects (qualification scoring, budget normalisation) that an
+interpretable architecture alone would not. The main organisational lesson is to agree
+the interfaces between parallel workstreams early --- the in-app and standalone matchers
+were unified late --- and to treat evaluation the same way: each KPI needs a fixed
+dataset snapshot, an owner, a reproducible script, and a decision date from the start.
+Scope discipline (deferring authenticated scraping, multi-tenancy, blueprint parsing,
+and a knowledge graph) kept the MVP focused; the next stage should add claim-to-source
+email checks, authenticated operator controls, a larger UAT with a human baseline, and
+fairness analysis.
+
+\section{How our understanding of GenAI changed, and conclusion}
+
+The project reframed GenAI as a language-and-orchestration component bounded by evidence
+objects, schemas, permissions, and user confirmation --- not a general decision-maker;
+the dry-run incident showed that a control matters only when it blocks the exact action
+that produces the risk. UAT separated usefulness from trust: a system can surface
+valuable leads while users stay unsure of the reasoning, and a fluent draft can still
+need factual review, so evaluating a GenAI application means weighing task completion,
+ranking quality, factual support, user understanding, operational limits, and
+auditability together. GTM Agent now forms an integrated MVP whose safety case rests on
+evidence-constrained generation, human review, restricted tools, offline-by-default
+agent behaviour, and traceable public data; the next stage should keep testing those
+boundaries, especially email-claim verification, operator access control, and broader
+user and fairness evaluation.

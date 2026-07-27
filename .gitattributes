@@ -1,0 +1,11 @@
+# Shell scripts must keep LF endings and stay executable.
+#
+# Both matter only off-Windows, which is exactly why they are easy to break from
+# a Windows checkout and impossible to notice there:
+#   * CRLF endings make the `#!/usr/bin/env bash` shebang fail on macOS/Linux
+#     with a confusing "bad interpreter: ... ^M" error.
+#   * the executable bit is not tracked by the Windows filesystem
+#     (core.filemode=false), so a script can be committed non-executable and
+#     then fail with "permission denied" for anyone who clones on macOS/Linux.
+#     Fix that with: git update-index --chmod=+x <path>
+*.sh text eol=lf

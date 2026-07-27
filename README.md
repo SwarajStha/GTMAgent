@@ -24,7 +24,10 @@ docker compose up -d --build                            # 4. backend + frontend
 #   docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d --build
 ```
 
-On Windows PowerShell, step 3 is `powershell -File scripts\seed\load_seed.ps1`.
+On Windows PowerShell, step 3 is `powershell -File scripts\seed\load_seed.ps1`. On
+macOS/Linux, if step 3 reports `permission denied`, your clone lost the script's
+executable bit — run it as `bash scripts/seed/load_seed.sh` instead (or
+`chmod +x scripts/seed/load_seed.sh` once).
 
 Then open **http://localhost:5173** — Tenders, Matches, Companies, Awards, Emails and
 saved agent analyses are all populated with real (public) EU procurement data.
